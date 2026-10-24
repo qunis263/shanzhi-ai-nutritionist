@@ -1201,12 +1201,13 @@ export function foodSearchTexts(food) {
  *      同名越短越靠前，避免「西瓜」被「西瓜汁」这类长名压在后面。
  *
  * @param {string} keyword 搜索词（空值返回库中前 limit 条）
- * @param {number} limit 返回条数上限
+ * @param {number} limit 返回条数上限；传入 `0` 或负数表示不限条数（用于「浏览全库」）
  * @returns {Array} 按相关度降序排列的食物数组
  */
 export function searchFood(keyword, limit = 30) {
   const kw = String(keyword || '').trim().toLowerCase()
-  if (!kw) return FOOD_DB.slice(0, limit)
+  // limit <= 0 → 返回全部条目（分类浏览 / 「全部」列表需要完整数据）
+  if (!kw) return limit > 0 ? FOOD_DB.slice(0, limit) : FOOD_DB.slice()
 
   const scored = []
   FOOD_DB.forEach((food) => {
@@ -1248,7 +1249,7 @@ export function searchFood(keyword, limit = 30) {
 
   return scored
     .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
+    .slice(0, limit > 0 ? limit : undefined)
     .map((item) => item.food)
 }
 

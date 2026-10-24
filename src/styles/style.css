@@ -434,6 +434,18 @@
   .list-item:hover {
     background: rgba(255, 255, 255, 0.7);
   }
+  /* 「展开更多」按钮：长列表分页用，保持轻量描边 + 文字居中 */
+  .more-btn {
+    @apply mt-1 w-full rounded-[14px] py-2.5 text-[12px] font-semibold transition-colors duration-200;
+    color: #7c8aa0;
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px dashed #e3e9f2;
+  }
+  .more-btn:hover {
+    color: #ff9f5b;
+    border-color: #ffc79b;
+    background: rgba(255, 255, 255, 0.9);
+  }
 
   /* 分割线 */
   .divider {

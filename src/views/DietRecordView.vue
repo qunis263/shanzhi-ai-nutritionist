@@ -12,7 +12,7 @@
  * 说明：所有数据来自 Pinia Store（dietStore / userStore），组件只负责展示与交互，
  *      不重复实现任何营养计算逻辑（统一复用 utils/nutrition 与 data/foods）。
  */
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -71,12 +71,46 @@ const form = reactive({
 /** 当前选中的食物对象（未选择时为 null） */
 const selectedFood = computed(() => (form.foodId ? findFood(form.foodId) : null))
 
-/** 搜索结果：先按关键词模糊搜索，再按分类筛选 */
-const searchResults = computed(() => {
-  const list = searchFood(form.keyword, 40)
+/** 搜索结果每次渲染的条数（点击「展开更多」继续追加，避免一次渲染近千条） */
+const PAGE_SIZE = 60
+/** 当前已展示条数 */
+const visibleCount = ref(PAGE_SIZE)
+
+/**
+ * 全量匹配结果：先取整库（limit=0 表示不限），再按分类筛选。
+ * 注意：分类筛选必须作用在**全库**上，否则「水果」等分类只会过滤前 40 条而显示为空。
+ */
+const matchedFoods = computed(() => {
+  const list = searchFood(form.keyword, 0)
   if (form.category === '全部') return list
   return list.filter((f) => f.category === form.category)
 })
+
+/** 当前实际渲染的结果（分页后的切片） */
+const searchResults = computed(() => matchedFoods.value.slice(0, visibleCount.value))
+
+/** 是否还有更多可展开 */
+const hasMore = computed(() => matchedFoods.value.length > visibleCount.value)
+
+/** 展开更多（每次追加一页） */
+function loadMore() {
+  visibleCount.value += PAGE_SIZE
+}
+
+/** 重置搜索词与分类（回到「全部」整库浏览） */
+function resetFilter() {
+  form.keyword = ''
+  form.category = '全部'
+  visibleCount.value = PAGE_SIZE
+}
+
+// 关键词或分类变化时，回到第一页
+watch(
+  () => [form.keyword, form.category],
+  () => {
+    visibleCount.value = PAGE_SIZE
+  }
+)
 
 /** 选中食物 + 分量下的实时营养预估（复用 scaleNutrition） */
 const previewNutrition = computed(() =>
@@ -337,8 +371,19 @@ const nickname = computed(() => userStore.profile.nickname)
             </button>
           </div>
 
+          <!-- 结果条数提示：让「全库共多少条 / 当前显示多少」对用户可见 -->
+          <div class="mt-2.5 flex items-center justify-between text-[11px] tx-muted">
+            <span>
+              共 <b class="num tx-sub">{{ matchedFoods.length }}</b> 条
+              <template v-if="hasMore">，已显示 {{ searchResults.length }} 条</template>
+            </span>
+            <button v-if="form.keyword || form.category !== '全部'" type="button" class="font-semibold tx-sub hover:text-orange-500" @click="resetFilter">
+              重置筛选
+            </button>
+          </div>
+
           <!-- 结果列表：可滚动，点击选中 -->
-          <div class="scroll-area mt-3 max-h-[220px] space-y-1 pr-1">
+          <div class="scroll-area mt-2 max-h-[240px] space-y-1 pr-1">
             <div
               v-for="food in searchResults"
               :key="food.id"
@@ -356,6 +401,12 @@ const nickname = computed(() => userStore.profile.nickname)
               </div>
               <span v-if="form.foodId === food.id" class="shrink-0 text-[13px]">✅</span>
             </div>
+
+            <!-- 展开更多：逐页追加，保证整库 915 条都能浏览到 -->
+            <button v-if="hasMore" type="button" class="more-btn" @click="loadMore">
+              展开更多（还有 {{ matchedFoods.length - searchResults.length }} 条）
+            </button>
+
             <EmptyState
               v-if="!searchResults.length"
               emoji="🔍"
