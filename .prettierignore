@@ -1,0 +1,8 @@
+# 构建产物与依赖不参与格式化
+dist/
+node_modules/
+package-lock.json
+
+# 文档使用人工排版，不做强制格式化
+*.md
+docs/

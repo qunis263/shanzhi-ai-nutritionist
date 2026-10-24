@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>登录 · 膳知・AI 营养分析师</title>
+    <meta name="description" content="膳知・AI 营养分析师 —— 拍照识别食物，智能分析营养，科学管理每一餐" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥗</text></svg>"
+    />
+
+    <!-- ============ Inter 无衬线字体（离线时自动回退系统字体） ============ -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- ============ TailwindCSS（Play CDN，配合下方自定义设计系统使用） ============ -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // 品牌色板与后台《膳知》马卡龙健康风保持统一
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              cream: '#fff9ef', // 浅米背景
+              warm: '#ff9f5b', // 主色暖橙
+              warmdeep: '#f2863f', // 暖橙加深（hover）
+              mint: '#86d0b0', // 辅助薄荷绿
+              mintbg: '#eaf7f1', // 薄荷绿浅底
+              ink: '#333333' // 文字深灰
+            },
+            fontFamily: {
+              sans: ['Inter', 'PingFang SC', 'Microsoft YaHei', 'system-ui', 'sans-serif']
+            },
+            boxShadow: {
+              card: '0 20px 60px rgba(255, 159, 91, 0.14), 0 4px 16px rgba(51, 51, 51, 0.06)',
+              soft: '0 6px 20px rgba(31, 45, 61, 0.07)'
+            }
+          }
+        }
+      }
+    </script>
+
+    <!-- ============ 自定义设计系统 ============
+         说明：核心布局与组件样式均写在下方，Tailwind CDN 仅作增强；
+         即使断网导致 CDN 不可用，页面布局与视觉依然完整（比赛现场兜底）。 -->
+    <style>
+      :root {
+        --cream: #fff9ef;
+        --warm: #ff9f5b;
+        --warm-deep: #f2863f;
+        --mint: #86d0b0;
+        --mint-bg: #eaf7f1;
+        --ink: #333333;
+        --sub: #7a7468;
+        --line: #f0e7d8;
+      }
+
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      html, body { height: 100%; }
+
+      body {
+        font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--cream);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ================= 全屏分栏：桌面 55% / 45% ================= */
+      .split {
+        display: grid;
+        grid-template-columns: 55fr 45fr;
+        min-height: 100vh;
+      }
+
+      /* ================= 左侧：项目介绍区 ================= */
+      .pane-left {
+        position: relative;
+        overflow: hidden;
+        padding: 64px 72px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        background:
+          radial-gradient(900px 520px at 8% -6%, #ffe9d2 0%, rgba(255, 233, 210, 0) 60%),
+          radial-gradient(760px 520px at 108% 112%, #dcf2e8 0%, rgba(220, 242, 232, 0) 58%),
+          linear-gradient(160deg, #fffdf8 0%, #fff9ef 55%, #fdf3e4 100%);
+      }
+
+      /* 矢量线稿装饰：描边低饱和，不抢文字 */
+      .deco {
+        position: absolute;
+        pointer-events: none;
+        opacity: 0.5;
+        animation: floaty 9s ease-in-out infinite;
+      }
+      .deco svg { display: block; }
+      .deco-1 { top: 7%; left: 5%; width: 118px; animation-delay: 0s; }
+      .deco-2 { top: 12%; right: 8%; width: 96px; animation-delay: 1.6s; }
+      .deco-3 { bottom: 10%; left: 9%; width: 104px; animation-delay: 3.1s; }
+      .deco-4 { bottom: 7%; right: 6%; width: 132px; animation-delay: 2.2s; }
+      .deco-5 { top: 44%; right: 4%; width: 74px; animation-delay: 4.2s; opacity: 0.38; }
+
+      @keyframes floaty {
+        0%, 100% { transform: translateY(0) rotate(0deg); }
+        50% { transform: translateY(-14px) rotate(2.5deg); }
+      }
+      /* 环形评分缓慢呼吸旋转 */
+      @keyframes breathe {
+        0%, 100% { transform: scale(1); opacity: 0.55; }
+        50% { transform: scale(1.06); opacity: 0.85; }
+      }
+      .ring-breathe { transform-origin: center; animation: breathe 6s ease-in-out infinite; }
+
+      /* 左侧正文：自上而下淡入 */
+      .fade-up { opacity: 0; transform: translateY(18px); animation: fadeUp 0.75s ease forwards; }
+      @keyframes fadeUp { to { opacity: 1; transform: translateY(0); } }
+      .d-1 { animation-delay: 0.08s; }
+      .d-2 { animation-delay: 0.24s; }
+      .d-3 { animation-delay: 0.4s; }
+      .d-4 { animation-delay: 0.56s; }
+      .d-5 { animation-delay: 0.72s; }
+
+      .brand-chip {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 7px 16px; border-radius: 999px;
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid var(--line);
+        box-shadow: 0 4px 14px rgba(255, 159, 91, 0.1);
+        font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
+        width: fit-content;
+      }
+
+      .pane-left h1 {
+        margin-top: 26px;
+        font-size: clamp(34px, 4.2vw, 54px);
+        font-weight: 900;
+        line-height: 1.18;
+        letter-spacing: -0.01em;
+        color: #2f2b25;
+      }
+      .pane-left h1 .accent {
+        background: linear-gradient(120deg, var(--warm) 0%, var(--warm-deep) 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .en-sub {
+        margin-top: 12px;
+        font-size: clamp(13px, 1.1vw, 15px);
+        font-weight: 600;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: #b08a5f;
+      }
+
+      .lead {
+        margin-top: 26px;
+        max-width: 560px;
+        font-size: 15.5px;
+        line-height: 2;
+        color: #6b655a;
+      }
+
+      .feat-chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
+      .feat-chip {
+        display: inline-flex; align-items: center; gap: 7px;
+        padding: 8px 15px; border-radius: 999px;
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid var(--line);
+        font-size: 12.5px; font-weight: 600; color: #6a5f4f;
+        box-shadow: 0 3px 10px rgba(31, 45, 61, 0.04);
+      }
+      .feat-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint); }
+      .feat-chip.warm .dot { background: var(--warm); }
+
+      .slogan-row {
+        margin-top: auto; padding-top: 48px;
+        display: flex; align-items: center; gap: 16px;
+      }
+      .slogan-line { width: 44px; height: 3px; border-radius: 3px;
+        background: linear-gradient(90deg, var(--warm), var(--mint)); }
+      .slogan {
+        font-size: 17px; font-weight: 800; letter-spacing: 0.06em; color: #4a433a;
+      }
+      .slogan small { display: block; margin-top: 4px; font-size: 11.5px; font-weight: 500;
+        letter-spacing: 0.2em; color: #a99c87; }
+
+      /* ================= 右侧：登录注册卡片区 ================= */
+      .pane-right {
+        display: flex; align-items: center; justify-content: center;
+        padding: 40px 32px;
+        background:
+          radial-gradient(680px 420px at 110% -10%, #fdeede 0%, rgba(253, 238, 222, 0) 60%),
+          linear-gradient(180deg, #fffaf2 0%, #fdf6ea 100%);
+      }
+
+      .auth-card {
+        width: 100%; max-width: 424px;
+        padding: 38px 36px 30px;
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.78);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+        border: 1px solid rgba(255, 255, 255, 0.9);
+        box-shadow: 0 20px 60px rgba(255, 159, 91, 0.14), 0 4px 16px rgba(51, 51, 51, 0.06);
+        animation: cardIn 0.6s ease both;
+      }
+      @keyframes cardIn { from { opacity: 0; transform: translateY(16px) scale(0.99); } to { opacity: 1; transform: none; } }
+
+      .auth-logo {
+        width: 52px; height: 52px; border-radius: 16px;
+        display: grid; place-items: center; font-size: 26px;
+        background: linear-gradient(135deg, #ffe2c4, #fff3e2);
+        box-shadow: inset 0 0 0 1px #ffe0bd;
+      }
+      .auth-title { margin-top: 16px; font-size: 22px; font-weight: 800; }
+      .auth-sub { margin-top: 6px; font-size: 13px; color: var(--sub); }
+
+      /* ---------- Tab 切换 ---------- */
+      .tabs {
+        position: relative; margin: 24px 0 22px;
+        display: grid; grid-template-columns: 1fr 1fr;
+        background: #f6efe3; border-radius: 999px; padding: 4px;
+      }
+      .tab-btn {
+        position: relative; z-index: 2;
+        border: 0; background: transparent; cursor: pointer;
+        padding: 9px 0; border-radius: 999px;
+        font-size: 14px; font-weight: 700; color: #9a907e;
+        font-family: inherit; transition: color 0.25s;
+      }
+      .tab-btn.active { color: #fff; }
+      .tab-glider {
+        position: absolute; z-index: 1; top: 4px; left: 4px;
+        width: calc(50% - 4px); height: calc(100% - 8px);
+        border-radius: 999px;
+        background: linear-gradient(135deg, var(--warm), var(--warm-deep));
+        box-shadow: 0 6px 14px rgba(255, 159, 91, 0.38);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      .tabs.register-on .tab-glider { transform: translateX(100%); }
+
+      /* ---------- 表单 ---------- */
+      .form-panel { display: none; }
+      .form-panel.active { display: block; animation: fadeUp 0.4s ease both; }
+
+      .field { margin-bottom: 16px; }
+      .field-label { display: block; margin-bottom: 7px; font-size: 12.5px; font-weight: 700; color: #5c554a; }
+      .input-wrap { position: relative; display: flex; align-items: center; }
+      .input-wrap .ic {
+        position: absolute; left: 14px; width: 17px; height: 17px; color: #bdb29f;
+        transition: color 0.2s; pointer-events: none;
+      }
+      .field-input {
+        width: 100%; height: 46px;
+        padding: 0 42px 0 42px;
+        border-radius: 14px;
+        border: 1.5px solid var(--line);
+        background: #fffdf9;
+        font-size: 14px; font-family: inherit; color: var(--ink);
+        outline: none;
+        transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+      }
+      .field-input::placeholder { color: #c3b9a8; }
+      /* hover：淡薄荷绿高亮；focus：暖橙描边 */
+      .field-input:hover { border-color: var(--mint); background: #fbfffd; }
+      .field-input:focus {
+        border-color: var(--warm);
+        background: #fff;
+        box-shadow: 0 0 0 4px rgba(255, 159, 91, 0.13);
+      }
+      .field-input:focus ~ .ic, .input-wrap:focus-within .ic { color: var(--warm); }
+      .field.has-error .field-input { border-color: #e57878; box-shadow: 0 0 0 4px rgba(229, 120, 120, 0.1); }
+      .error-msg { display: none; margin-top: 6px; font-size: 11.5px; font-weight: 600; color: #d95f5f; }
+      .field.has-error .error-msg { display: block; }
+
+      .eye-btn {
+        position: absolute; right: 10px; border: 0; background: transparent;
+        width: 28px; height: 28px; border-radius: 8px; cursor: pointer;
+        display: grid; place-items: center; color: #bdb29f;
+      }
+      .eye-btn:hover { color: var(--mint); background: var(--mint-bg); }
+      .eye-btn svg { width: 17px; height: 17px; }
+
+      .form-row { display: flex; align-items: center; justify-content: space-between; margin: 2px 0 18px; }
+      .remember { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; color: #6f675a; user-select: none; }
+      .remember input { display: none; }
+      .checkbox {
+        width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid #d9cfbd;
+        background: #fff; display: grid; place-items: center; transition: all 0.2s; flex: none;
+      }
+      .checkbox svg { width: 11px; height: 11px; color: #fff; opacity: 0; transition: opacity 0.15s; }
+      .remember input:checked + .checkbox { background: linear-gradient(135deg, var(--warm), var(--warm-deep)); border-color: transparent; }
+      .remember input:checked + .checkbox svg { opacity: 1; }
+
+      .link-btn {
+        border: 0; background: transparent; padding: 0; cursor: pointer;
+        font-size: 12.5px; font-weight: 700; color: var(--warm-deep); font-family: inherit;
+      }
+      .link-btn:hover { color: #dd6f28; text-decoration: underline; }
+
+      .btn-primary {
+        width: 100%; height: 48px; border: 0; border-radius: 14px; cursor: pointer;
+        font-family: inherit; font-size: 15px; font-weight: 800; letter-spacing: 0.04em; color: #fff;
+        background: linear-gradient(135deg, var(--warm), var(--warm-deep));
+        box-shadow: 0 10px 22px rgba(255, 159, 91, 0.34);
+        transition: transform 0.18s, box-shadow 0.18s, filter 0.18s;
+      }
+      .btn-primary:hover { transform: scale(1.02); filter: brightness(1.05); box-shadow: 0 14px 28px rgba(255, 159, 91, 0.42); }
+      .btn-primary:active { transform: scale(0.985); }
+
+      .switch-hint { margin-top: 18px; text-align: center; font-size: 12.5px; color: #8f8676; }
+
+      /* 演示账号提示卡（方便评委一键填入） */
+      .demo-box {
+        margin-top: 20px; padding: 12px 14px; border-radius: 14px;
+        background: var(--mint-bg); border: 1px dashed #aeddc9;
+        font-size: 12px; line-height: 1.7; color: #4c7d68;
+      }
+      .demo-box b { color: #2f7a5c; }
+      .demo-fill {
+        margin-left: 4px; border: 0; background: transparent; cursor: pointer;
+        font-weight: 800; color: #2f9e6b; font-family: inherit; font-size: 12px;
+      }
+      .demo-fill:hover { text-decoration: underline; }
+
+      /* 已登录提示条 */
+      .logged-ribbon {
+        display: none; align-items: center; gap: 10px;
+        margin-bottom: 18px; padding: 10px 14px; border-radius: 12px;
+        background: #fff4e4; border: 1px solid #ffdfb8; font-size: 12.5px; color: #9a5f24;
+      }
+      .logged-ribbon.show { display: flex; }
+      .logged-ribbon .spacer { flex: 1; }
+
+      /* ---------- 页脚 ---------- */
+      .page-foot {
+        position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+        font-size: 11px; color: #b8ac97; letter-spacing: 0.05em; white-space: nowrap;
+      }
+
+      /* ---------- Toast 轻提示 ---------- */
+      .toast {
+        position: fixed; top: 26px; left: 50%; transform: translate(-50%, -16px);
+        padding: 11px 22px; border-radius: 999px;
+        font-size: 13px; font-weight: 700; color: #fff;
+        box-shadow: 0 12px 30px rgba(31, 45, 61, 0.2);
+        opacity: 0; pointer-events: none; transition: all 0.3s; z-index: 99;
+      }
+      .toast.show { opacity: 1; transform: translate(-50%, 0); }
+      .toast.ok { background: linear-gradient(135deg, #5fc79b, #3fb184); }
+      .toast.err { background: linear-gradient(135deg, #ef7d7d, #e05f5f); }
+
+      /* ================= 移动端：上下堆叠 ================= */
+      @media (max-width: 900px) {
+        .split { grid-template-columns: 1fr; }
+        .pane-left { padding: 44px 28px 32px; }
+        .pane-left h1 { font-size: 30px; }
+        .lead { font-size: 14px; line-height: 1.85; }
+        .slogan-row { padding-top: 28px; }
+        .deco { opacity: 0.32; }
+        .deco-4, .deco-5 { display: none; }
+        .pane-right { padding: 28px 20px 60px; }
+        .page-foot { position: static; transform: none; text-align: center; padding: 8px 0 18px; }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="split">
+      <!-- ================================================================
+           左侧 55%：项目介绍区
+           ================================================================ -->
+      <section class="pane-left">
+        <!-- 线稿装饰①：餐盘 -->
+        <div class="deco deco-1" aria-hidden="true">
+          <svg viewBox="0 0 120 120" fill="none" stroke="#e8a86f" stroke-width="2.4" stroke-linecap="round">
+            <circle cx="60" cy="60" r="46" />
+            <circle cx="60" cy="60" r="30" stroke-dasharray="4 6" />
+            <path d="M60 30v10M60 80v10M30 60h10M80 60h10" />
+          </svg>
+        </div>
+
+        <!-- 线稿装饰②：蔬菜叶 -->
+        <div class="deco deco-2" aria-hidden="true">
+          <svg viewBox="0 0 100 100" fill="none" stroke="#7cc4a4" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M50 88 C50 60 30 48 20 30 C44 30 62 42 66 62" />
+            <path d="M50 88 C52 62 70 46 82 34 C80 58 66 76 50 88Z" />
+            <path d="M50 84 C46 66 40 58 30 50" stroke-dasharray="3 5" />
+          </svg>
+        </div>
+
+        <!-- 线稿装饰③：水杯 -->
+        <div class="deco deco-3" aria-hidden="true">
+          <svg viewBox="0 0 100 100" fill="none" stroke="#8fb8d8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M32 18h36l-4 66a6 6 0 0 1-6 5.6H42a6 6 0 0 1-6-5.6L32 18Z" />
+            <path d="M38 40c4 5 20 5 24 0" stroke-dasharray="3 5" />
+            <path d="M28 18h44" />
+          </svg>
+        </div>
+
+        <!-- 线稿装饰④：营养环形评分图 -->
+        <div class="deco deco-4" aria-hidden="true">
+          <svg viewBox="0 0 140 140" fill="none" stroke-width="7" stroke-linecap="round">
+            <g class="ring-breathe">
+              <circle cx="70" cy="70" r="52" stroke="#ffe0bd" />
+              <circle cx="70" cy="70" r="52" stroke="#ff9f5b" stroke-dasharray="245 327" transform="rotate(-90 70 70)" />
+              <circle cx="70" cy="70" r="36" stroke="#d8efe5" />
+              <circle cx="70" cy="70" r="36" stroke="#86d0b0" stroke-dasharray="150 226" transform="rotate(-90 70 70)" />
+            </g>
+          </svg>
+        </div>
+
+        <!-- 线稿装饰⑤：小果实 -->
+        <div class="deco deco-5" aria-hidden="true">
+          <svg viewBox="0 0 80 80" fill="none" stroke="#e8a86f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="40" cy="46" r="22" />
+            <path d="M40 24c0-8 6-12 12-12M40 24c4-6 10-8 16-6" />
+          </svg>
+        </div>
+
+        <!-- 正文内容 -->
+        <div>
+          <span class="brand-chip fade-up d-1">🥗 膳知 SHANZHI · AI 健康饮食平台</span>
+
+          <h1 class="fade-up d-2">
+            膳知・<span class="accent">AI 营养分析师</span>
+          </h1>
+          <p class="en-sub fade-up d-2">Smart Nutrition Analyst</p>
+
+          <p class="lead fade-up d-3">
+            基于 AI 食物识别的智能膳食分析平台。拍照识别食物，自动计算热量、蛋白质、糖分等营养指标；
+            记录三餐饮食，生成可视化营养报告，追踪每日营养摄入，智能推荐膳食方案，科学管理体重与健康。
+          </p>
+
+          <div class="feat-chips fade-up d-4">
+            <span class="feat-chip warm"><span class="dot"></span>AI 拍照识食</span>
+            <span class="feat-chip"><span class="dot"></span>营养精准计算</span>
+            <span class="feat-chip warm"><span class="dot"></span>可视化报告</span>
+            <span class="feat-chip"><span class="dot"></span>AI 营养对话</span>
+            <span class="feat-chip warm"><span class="dot"></span>智能膳食推荐</span>
+          </div>
+        </div>
+
+        <div class="slogan-row fade-up d-5">
+          <span class="slogan-line"></span>
+          <p class="slogan">
+            读懂每一餐，平衡好营养。
+            <small>EAT WELL · KNOW YOUR NUTRITION</small>
+          </p>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           右侧 45%：登录 / 注册卡片
+           ================================================================ -->
+      <section class="pane-right">
+        <div class="auth-card">
+          <!-- 已登录状态条（已登录再访问本页时显示） -->
+          <div class="logged-ribbon" id="loggedRibbon">
+            <span>✅ 已登录为 <b id="loggedName"></b></span>
+            <span class="spacer"></span>
+            <button class="link-btn" id="enterAppBtn">进入应用 →</button>
+            <button class="link-btn" id="logoutBtn" style="color:#c2784a">退出</button>
+          </div>
+
+          <div class="auth-logo">🥗</div>
+          <h2 class="auth-title">欢迎使用膳知</h2>
+          <p class="auth-sub">登录后开启你的 AI 营养分析之旅</p>
+
+          <!-- Tab 切换 -->
+          <div class="tabs" id="tabs">
+            <span class="tab-glider"></span>
+            <button type="button" class="tab-btn active" data-tab="login">登录</button>
+            <button type="button" class="tab-btn" data-tab="register">注册</button>
+          </div>
+
+          <!-- ============ 登录表单 ============ -->
+          <form class="form-panel active" id="loginForm" novalidate>
+            <div class="field" id="loginAccountField">
+              <label class="field-label" for="loginAccount">账号</label>
+              <div class="input-wrap">
+                <input class="field-input" id="loginAccount" type="text" placeholder="用户名 / 手机号" autocomplete="username" />
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="8" r="4" /><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7" />
+                </svg>
+              </div>
+              <p class="error-msg" id="loginAccountErr">请输入账号</p>
+            </div>
+
+            <div class="field" id="loginPasswordField">
+              <label class="field-label" for="loginPassword">密码</label>
+              <div class="input-wrap">
+                <input class="field-input" id="loginPassword" type="password" placeholder="请输入密码" autocomplete="current-password" />
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="4" y="10" width="16" height="11" rx="2.5" /><path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                </svg>
+                <button type="button" class="eye-btn" data-target="loginPassword" aria-label="显示或隐藏密码">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" />
+                  </svg>
+                </button>
+              </div>
+              <p class="error-msg" id="loginPasswordErr">请输入密码</p>
+            </div>
+
+            <div class="form-row">
+              <label class="remember">
+                <input type="checkbox" id="rememberMe" checked />
+                <span class="checkbox">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5" /></svg>
+                </span>
+                记住我
+              </label>
+              <button type="button" class="link-btn" id="forgotBtn">忘记密码？</button>
+            </div>
+
+            <button type="submit" class="btn-primary">登 录</button>
+
+            <p class="switch-hint">还没有账号？<button type="button" class="link-btn" data-goto="register">立即注册</button></p>
+
+            <!-- 演示账号（评委一键填入） -->
+            <div class="demo-box">
+              🎯 <b>演示账号</b>：shanzhi &nbsp;密码：123456
+              <button type="button" class="demo-fill" id="fillDemo">一键填入 →</button>
+            </div>
+            <p style="margin-top: 10px; font-size: 11px; line-height: 1.7; color: #9aa3b2">
+              说明：本作品为纯前端演示鉴权，账号仅保存在本机浏览器（localStorage），
+              不涉及真实服务端认证；登录态与你的健康档案、饮食记录相互隔离，退出登录不会清空数据。
+            </p>
+          </form>
+
+          <!-- ============ 注册表单 ============ -->
+          <form class="form-panel" id="registerForm" novalidate>
+            <div class="field" id="regNameField">
+              <label class="field-label" for="regName">用户名</label>
+              <div class="input-wrap">
+                <input class="field-input" id="regName" type="text" placeholder="2-12 位中文 / 字母 / 数字" autocomplete="off" />
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="8" r="4" /><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7" />
+                </svg>
+              </div>
+              <p class="error-msg" id="regNameErr">请输入 2-12 位用户名</p>
+            </div>
+
+            <div class="field" id="regPhoneField">
+              <label class="field-label" for="regPhone">手机号</label>
+              <div class="input-wrap">
+                <input class="field-input" id="regPhone" type="tel" maxlength="11" placeholder="请输入 11 位手机号" autocomplete="off" />
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="6" y="2.5" width="12" height="19" rx="3" /><path d="M10.5 18.5h3" />
+                </svg>
+              </div>
+              <p class="error-msg" id="regPhoneErr">请输入正确的 11 位手机号</p>
+            </div>
+
+            <div class="field" id="regPasswordField">
+              <label class="field-label" for="regPassword">密码</label>
+              <div class="input-wrap">
+                <input class="field-input" id="regPassword" type="password" placeholder="至少 6 位" autocomplete="new-password" />
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="4" y="10" width="16" height="11" rx="2.5" /><path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                </svg>
+                <button type="button" class="eye-btn" data-target="regPassword" aria-label="显示或隐藏密码">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" />
+                  </svg>
+                </button>
+              </div>
+              <p class="error-msg" id="regPasswordErr">密码至少 6 位</p>
+            </div>
+
+            <div class="field" id="regConfirmField">
+              <label class="field-label" for="regConfirm">确认密码</label>
+              <div class="input-wrap">
+                <input class="field-input" id="regConfirm" type="password" placeholder="请再次输入密码" autocomplete="new-password" />
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="4" y="10" width="16" height="11" rx="2.5" /><path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                </svg>
+              </div>
+              <p class="error-msg" id="regConfirmErr">两次输入的密码不一致</p>
+            </div>
+
+            <button type="submit" class="btn-primary" style="margin-top:4px">注 册</button>
+
+            <p class="switch-hint">已有账号？<button type="button" class="link-btn" data-goto="login">前往登录</button></p>
+          </form>
+        </div>
+      </section>
+    </div>
+
+    <p class="page-foot">© 2026 膳知・AI 营养分析师 · 大学生学科竞赛作品 · 数据仅存于本地浏览器</p>
+
+    <div class="toast" id="toast"></div>
+
+    <!-- ==================================================================
+         原生 JS：Tab 切换 / 表单校验 / 本地账号体系
+         ------------------------------------------------------------------
+         · 纯前端演示账号体系：账号信息保存在 localStorage（密码 Base64
+           仅做防肉眼窥视，非加密；对接后端时替换 AuthAPI 即可）
+         · 登录态键 shanzhi_auth_v1 与后台 Vue 路由守卫共用，
+           不触碰已有的档案/饮食数据键（ai_nutrition_*_v1）
+         · 「记住我」勾选 → localStorage；不勾 → sessionStorage（关窗失效）
+    =================================================================== -->
+    <script>
+      (function () {
+        'use strict'
+
+        /* ---------------- 存储键（与 src/utils/auth.js 保持一致） ---------------- */
+        var USERS_KEY = 'shanzhi_users_v1'
+        var AUTH_KEY = 'shanzhi_auth_v1'
+        var DEMO_USER = { username: 'shanzhi', phone: '13800000000', createdAt: '2026-10-16' }
+
+        /* Base64 编解码（中文用 URI 组件兜底；仅演示用途） */
+        function encodePwd(text) {
+          return btoa(unescape(encodeURIComponent(text)))
+        }
+        function decodePwd(b64) {
+          try { return decodeURIComponent(escape(atob(b64))) } catch (e) { return '' }
+        }
+
+        /* 读取/写入用户表；首次访问自动写入演示账号 */
+        function loadUsers() {
+          try {
+            var raw = localStorage.getItem(USERS_KEY)
+            if (raw) return JSON.parse(raw) || []
+          } catch (e) { /* 损坏则重建 */ }
+          var seed = [Object.assign({}, DEMO_USER, { password: encodePwd('123456') })]
+          localStorage.setItem(USERS_KEY, JSON.stringify(seed))
+          return seed
+        }
+        function saveUsers(list) {
+          localStorage.setItem(USERS_KEY, JSON.stringify(list))
+        }
+
+        /* 登录态：localStorage（记住我）或 sessionStorage（本次有效） */
+        function getAuth() {
+          ['localStorage', 'sessionStorage'].forEach(function (storeName) {
+            try {
+              var raw = window[storeName].getItem(AUTH_KEY)
+              if (raw) {
+                var parsed = JSON.parse(raw)
+                if (parsed && parsed.username) parsed.__store = storeName
+                window.__authCache = parsed
+              }
+            } catch (e) {}
+          })
+          return window.__authCache || null
+        }
+        function setAuth(user, remember) {
+          clearAuth()
+          var payload = JSON.stringify({ username: user.username, loginAt: Date.now() })
+          if (remember) localStorage.setItem(AUTH_KEY, payload)
+          else sessionStorage.setItem(AUTH_KEY, payload)
+        }
+        function clearAuth() {
+          localStorage.removeItem(AUTH_KEY)
+          sessionStorage.removeItem(AUTH_KEY)
+        }
+
+        /* ---------------- Toast ---------------- */
+        var toastEl = document.getElementById('toast')
+        var toastTimer = null
+        function toast(message, type) {
+          toastEl.textContent = message
+          toastEl.className = 'toast show ' + (type === 'err' ? 'err' : 'ok')
+          clearTimeout(toastTimer)
+          toastTimer = setTimeout(function () { toastEl.className = 'toast' }, 2200)
+        }
+
+        /* ---------------- 校验辅助 ---------------- */
+        function setError(fieldId, hasError) {
+          document.getElementById(fieldId).classList.toggle('has-error', !!hasError)
+        }
+        var NAME_RE = /^[一-龥A-Za-z0-9_]{2,12}$/
+        var PHONE_RE = /^1[3-9]\d{9}$/
+
+        /* ---------------- Tab 切换 ---------------- */
+        var tabs = document.getElementById('tabs')
+        function switchTab(name) {
+          tabs.classList.toggle('register-on', name === 'register')
+          tabs.querySelectorAll('.tab-btn').forEach(function (btn) {
+            btn.classList.toggle('active', btn.dataset.tab === name)
+          })
+          document.getElementById('loginForm').classList.toggle('active', name === 'login')
+          document.getElementById('registerForm').classList.toggle('active', name === 'register')
+        }
+        tabs.addEventListener('click', function (e) {
+          var btn = e.target.closest('.tab-btn')
+          if (btn) switchTab(btn.dataset.tab)
+        })
+        document.querySelectorAll('[data-goto]').forEach(function (btn) {
+          btn.addEventListener('click', function () { switchTab(btn.dataset.goto) })
+        })
+
+        /* ---------------- 密码显示/隐藏 ---------------- */
+        document.querySelectorAll('.eye-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var input = document.getElementById(btn.dataset.target)
+            input.type = input.type === 'password' ? 'text' : 'password'
+          })
+        })
+
+        /* 输入时清除错误态 */
+        document.querySelectorAll('.field-input').forEach(function (input) {
+          input.addEventListener('input', function () {
+            var field = input.closest('.field')
+            if (field) field.classList.remove('has-error')
+          })
+        })
+
+        /* ---------------- 登录提交 ---------------- */
+        document.getElementById('loginForm').addEventListener('submit', function (e) {
+          e.preventDefault()
+          var account = document.getElementById('loginAccount').value.trim()
+          var password = document.getElementById('loginPassword').value
+          var remember = document.getElementById('rememberMe').checked
+          var ok = true
+          if (!account) { setError('loginAccountField', true); ok = false }
+          if (!password) { setError('loginPasswordField', true); ok = false }
+          if (!ok) return
+
+          var users = loadUsers()
+          var user = users.find(function (u) {
+            return u.username === account || u.phone === account
+          })
+          if (!user || decodePwd(user.password) !== password) {
+            setError('loginPasswordField', true)
+            document.getElementById('loginPasswordErr').textContent = '账号或密码错误，请重试'
+            toast('账号或密码错误', 'err')
+            return
+          }
+          setAuth(user, remember)
+          toast('登录成功，正在进入膳知…')
+          // 回到后台首页（login.html 位于站点根，./ 即 Vue 应用入口）
+          setTimeout(function () { location.replace('./') }, 650)
+        })
+
+        /* ---------------- 注册提交 ---------------- */
+        document.getElementById('registerForm').addEventListener('submit', function (e) {
+          e.preventDefault()
+          var name = document.getElementById('regName').value.trim()
+          var phone = document.getElementById('regPhone').value.trim()
+          var pwd = document.getElementById('regPassword').value
+          var confirm = document.getElementById('regConfirm').value
+          var users = loadUsers()
+          var valid = true
+
+          if (!NAME_RE.test(name)) { setError('regNameField', true); valid = false }
+          if (!PHONE_RE.test(phone)) { setError('regPhoneField', true); valid = false }
+          if (pwd.length < 6) { setError('regPasswordField', true); valid = false }
+          if (confirm !== pwd || !confirm) { setError('regConfirmField', true); valid = false }
+          if (users.some(function (u) { return u.username === name })) {
+            setError('regNameField', true)
+            document.getElementById('regNameErr').textContent = '该用户名已被注册'
+            valid = false
+          }
+          if (users.some(function (u) { return u.phone === phone })) {
+            setError('regPhoneField', true)
+            document.getElementById('regPhoneErr').textContent = '该手机号已被注册'
+            valid = false
+          }
+          if (!valid) { toast('请检查填写的信息', 'err'); return }
+
+          var newUser = { username: name, phone: phone, password: encodePwd(pwd), createdAt: new Date().toISOString().slice(0, 10) }
+          users.push(newUser)
+          saveUsers(users)
+          // 注册成功后自动登录进入应用
+          setAuth(newUser, true)
+          toast('注册成功，正在进入膳知…')
+          setTimeout(function () { location.replace('./') }, 650)
+        })
+
+        /* ---------------- 其他交互 ---------------- */
+        // 一键填入演示账号
+        document.getElementById('fillDemo').addEventListener('click', function () {
+          document.getElementById('loginAccount').value = 'shanzhi'
+          document.getElementById('loginPassword').value = '123456'
+          setError('loginAccountField', false)
+          setError('loginPasswordField', false)
+          toast('已填入演示账号，点击登录即可')
+        })
+
+        // 忘记密码（纯前端演示，无真实找回链路）
+        document.getElementById('forgotBtn').addEventListener('click', function () {
+          toast('演示版本：请使用演示账号 shanzhi / 123456，或注册新账号')
+        })
+
+        // 已登录态：显示快捷入口
+        var auth = getAuth()
+        if (auth) {
+          var ribbon = document.getElementById('loggedRibbon')
+          ribbon.classList.add('show')
+          document.getElementById('loggedName').textContent = auth.username
+          document.getElementById('enterAppBtn').addEventListener('click', function () { location.replace('./') })
+          document.getElementById('logoutBtn').addEventListener('click', function () {
+            clearAuth()
+            ribbon.classList.remove('show')
+            toast('已退出登录')
+          })
+        }
+      })()
+    </script>
+  </body>
+</html>

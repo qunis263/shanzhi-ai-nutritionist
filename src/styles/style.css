@@ -1,0 +1,793 @@
+/* =============================================================================
+ * 《膳知・AI 营养分析师》· 全局样式设计系统
+ * -----------------------------------------------------------------------------
+ * 风格约束（全项目强制统一）：
+ *   马卡龙多彩卡片 + Emoji 风格 / 明亮浅色主题 / 无磨砂玻璃 / 无深色模式
+ *   全部卡片：大圆角(24px) + 柔和阴影；hover 有上浮 + 阴影加深 + 轻微放大
+ *   全局页面淡入过渡；数据状态：达标✅绿色 / 超标🔴红色 / 营养偏少💡黄色
+ * ========================================================================== */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =============================================================================
+ * 一、设计变量（Design Tokens）
+ * ========================================================================== */
+:root {
+  /* 六种马卡龙底色（与需求严格一致，不可随意改动） */
+  --mc-orange: #fff1e6; /* 浅橙 */
+  --mc-green: #e6f7ef; /* 浅绿 */
+  --mc-blue: #e6f4ff; /* 浅蓝 */
+  --mc-purple: #f3efff; /* 浅紫 */
+  --mc-yellow: #fff9e6; /* 浅黄 */
+  --mc-cyan: #e6f9f7; /* 浅青 */
+
+  /* 状态色 */
+  --st-ok: #10b981; /* 达标 ✅ */
+  --st-over: #ef4444; /* 超标 🔴 */
+  --st-low: #f5a524; /* 偏少 💡 */
+
+  /* 文字色阶 */
+  --tx-main: #3a4553;
+  --tx-sub: #6b7a8d;
+  --tx-muted: #98a5b5;
+
+  /* 圆角与阴影 */
+  --radius-card: 24px;
+  --radius-sm: 14px;
+  --shadow-card: 0 6px 20px rgba(31, 45, 61, 0.07);
+  --shadow-hover: 0 18px 40px rgba(31, 45, 61, 0.15);
+}
+
+/* =============================================================================
+ * 二、基础层（Base）
+ * ========================================================================== */
+@layer base {
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    color: var(--tx-main);
+    font-family: 'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', system-ui, -apple-system,
+      'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* 明亮浅色底：柔和的马卡龙光晕，非磨砂玻璃 */
+    background-color: #fbfcfe;
+    background-image:
+      radial-gradient(1000px 520px at 6% -8%, var(--mc-orange) 0%, rgba(255, 241, 230, 0) 62%),
+      radial-gradient(900px 480px at 100% 0%, var(--mc-blue) 0%, rgba(230, 244, 255, 0) 58%),
+      radial-gradient(900px 560px at 46% 106%, var(--mc-purple) 0%, rgba(243, 239, 255, 0) 60%);
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+  }
+
+  /* PC 端适配：整站固定最小宽度，避免窗口缩小时布局错乱 */
+  body {
+    min-width: 1180px;
+  }
+
+  /* 自定义滚动条（浅色、圆润、不抢视觉） */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #e2e8f0;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #cbd5e1;
+  }
+
+  /* 去除数字输入框的上下箭头，保持表单整洁 */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+}
+
+/* =============================================================================
+ * 三、组件层（Components）—— 全站复用的马卡龙 UI 原子
+ * ========================================================================== */
+@layer components {
+  /* ---------- 3.1 马卡龙卡片 ---------- */
+  /* 基础卡片：白底 + 大圆角 + 柔和阴影 + 过渡 */
+  .macaron-card {
+    @apply relative rounded-card p-5 shadow-card transition-all duration-300 ease-out;
+    background-color: #ffffff;
+  }
+
+  /* 六种配色修饰符（独立低饱和马卡龙底色） */
+  .mc-orange {
+    background-color: var(--mc-orange);
+  }
+  .mc-green {
+    background-color: var(--mc-green);
+  }
+  .mc-blue {
+    background-color: var(--mc-blue);
+  }
+  .mc-purple {
+    background-color: var(--mc-purple);
+  }
+  .mc-yellow {
+    background-color: var(--mc-yellow);
+  }
+  .mc-cyan {
+    background-color: var(--mc-cyan);
+  }
+  .mc-white {
+    background-color: #ffffff;
+  }
+
+  /* hover 交互：上浮 + 阴影加深 + 轻微放大
+     （位移量控制在 4px / 1.012 倍，保证流畅不杂乱） */
+  .card-hover:hover {
+    @apply shadow-cardHover;
+    transform: translateY(-4px) scale(1.012);
+  }
+
+  /* 静态卡片：仅上浮不缩放（用于承载 ECharts 画布的容器，避免缩放导致模糊） */
+  .card-hover-static:hover {
+    @apply shadow-cardHover;
+    transform: translateY(-4px);
+  }
+
+  /* 卡片顶部左侧的彩色小竖条装饰 */
+  .card-bar::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 26px;
+    bottom: 26px;
+    width: 4px;
+    border-radius: 0 4px 4px 0;
+    background: linear-gradient(180deg, #ffd9bd, #ffc59b);
+  }
+
+  /* ---------- 3.2 卡片标题 ---------- */
+  .card-title {
+    @apply flex items-center gap-2 text-[16px] font-bold;
+    color: var(--tx-main);
+  }
+  .card-sub {
+    @apply mt-0.5 text-xs;
+    color: var(--tx-muted);
+  }
+  /* 标题右侧的操作区（按钮 / 切换） */
+  .card-head {
+    @apply mb-4 flex items-start justify-between gap-3;
+  }
+
+  /* Emoji 图标底座（圆形浅色背景） */
+  .emoji-badge {
+    @apply grid h-9 w-9 shrink-0 place-items-center rounded-[12px] text-[18px] leading-none;
+    background: rgba(255, 255, 255, 0.75);
+  }
+  .emoji-badge-lg {
+    @apply grid h-14 w-14 shrink-0 place-items-center rounded-[18px] text-[28px] leading-none;
+    background: rgba(255, 255, 255, 0.75);
+  }
+
+  /* ---------- 3.3 页面区块标题 ---------- */
+  .page-title {
+    @apply text-[22px] font-extrabold tracking-tight;
+    color: #2c3646;
+  }
+  .page-desc {
+    @apply mt-1 text-[13px];
+    color: var(--tx-sub);
+  }
+
+  /* 核心品牌名「膳知」：马卡龙紫→青渐变字，全站品牌区共用 */
+  .brand-name {
+    background: linear-gradient(120deg, #9b83e8 0%, #4ec98e 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+
+  /* ---------- 3.4 数据小卡（Tiles） ---------- */
+  .tile {
+    @apply rounded-[18px] p-4 transition-all duration-300 ease-out;
+  }
+  .tile-label {
+    @apply flex items-center gap-1.5 text-xs font-medium;
+    color: var(--tx-sub);
+  }
+  .tile-value {
+    @apply mt-2 text-[26px] font-extrabold leading-none;
+    color: #2c3646;
+  }
+  .tile-unit {
+    @apply ml-1 text-xs font-semibold;
+    color: var(--tx-muted);
+  }
+
+  /* ---------- 3.5 状态标签（达标 / 超标 / 偏少）---------- */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-pill px-2.5 py-1 text-[11px] font-bold leading-none;
+  }
+  .badge-ok {
+    background-color: rgba(16, 185, 129, 0.12);
+    color: #0f9d6e;
+  }
+  .badge-over {
+    background-color: rgba(239, 68, 68, 0.12);
+    color: #dc5252;
+  }
+  .badge-low {
+    background-color: rgba(245, 165, 36, 0.16);
+    color: #b8801a;
+  }
+  .badge-info {
+    background-color: rgba(59, 127, 212, 0.12);
+    color: #3b7fd4;
+  }
+
+  /* 通用浅色标签（按底色变体） */
+  .tag {
+    @apply inline-flex items-center gap-1 rounded-pill px-2.5 py-1 text-[11px] font-semibold;
+    color: var(--tx-sub);
+    background: #f3f5f9;
+  }
+  .tag-orange {
+    background: var(--mc-orange);
+    color: #b46b3a;
+  }
+  .tag-green {
+    background: var(--mc-green);
+    color: #2f9e6b;
+  }
+  .tag-blue {
+    background: var(--mc-blue);
+    color: #3b7fd4;
+  }
+  .tag-purple {
+    background: var(--mc-purple);
+    color: #7a5fd0;
+  }
+  .tag-yellow {
+    background: var(--mc-yellow);
+    color: #b9912f;
+  }
+  .tag-cyan {
+    background: var(--mc-cyan);
+    color: #2f9e9a;
+  }
+
+  /* ---------- 3.6 按钮 ---------- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-pill px-4 py-2 text-[13px] font-bold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50;
+    user-select: none;
+  }
+  .btn:active {
+    transform: scale(0.97);
+  }
+  /* 主按钮：马卡龙橙渐变 */
+  .btn-primary {
+    background: linear-gradient(135deg, #ffb27a, #ff8f5a);
+    color: #fff;
+    box-shadow: 0 6px 16px rgba(255, 143, 90, 0.32);
+  }
+  .btn-primary:hover {
+    box-shadow: 0 10px 24px rgba(255, 143, 90, 0.42);
+    transform: translateY(-1px);
+  }
+  /* 绿色按钮 */
+  .btn-green {
+    background: linear-gradient(135deg, #7fdbb0, #4ec98e);
+    color: #fff;
+    box-shadow: 0 6px 16px rgba(78, 201, 142, 0.3);
+  }
+  .btn-green:hover {
+    box-shadow: 0 10px 24px rgba(78, 201, 142, 0.4);
+    transform: translateY(-1px);
+  }
+  /* 紫色按钮 */
+  .btn-purple {
+    background: linear-gradient(135deg, #b9a6f2, #9b83e8);
+    color: #fff;
+    box-shadow: 0 6px 16px rgba(155, 131, 232, 0.3);
+  }
+  .btn-purple:hover {
+    box-shadow: 0 10px 24px rgba(155, 131, 232, 0.4);
+    transform: translateY(-1px);
+  }
+  /* 次要按钮：白底描边 */
+  .btn-ghost {
+    background: #fff;
+    color: var(--tx-sub);
+    box-shadow: inset 0 0 0 1px #e7ecf3;
+  }
+  .btn-ghost:hover {
+    color: #2c3646;
+    box-shadow: inset 0 0 0 1px #d8e0ea;
+  }
+  /* 极小按钮（表格内删除等） */
+  .btn-xs {
+    @apply px-2.5 py-1 text-[11px];
+  }
+  .btn-danger-soft {
+    background: rgba(239, 68, 68, 0.1);
+    color: #dc5252;
+  }
+  .btn-danger-soft:hover {
+    background: rgba(239, 68, 68, 0.18);
+  }
+
+  /* ---------- 3.7 表单控件 ---------- */
+  .field-label {
+    @apply mb-1.5 block text-[12px] font-semibold;
+    color: var(--tx-sub);
+  }
+  .field {
+    @apply w-full rounded-[14px] border-0 bg-white px-3.5 py-2.5 text-[13px] outline-none transition-all duration-200;
+    color: var(--tx-main);
+    box-shadow: inset 0 0 0 1px #e7ecf3;
+  }
+  .field::placeholder {
+    color: #b6c0cd;
+  }
+  .field:focus {
+    box-shadow: inset 0 0 0 2px #ffc59b;
+  }
+  /* 下拉框 */
+  select.field {
+    @apply appearance-none pr-8;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2398a5b5' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+  }
+
+  /* 分段选择器（性别 / 运动强度等） */
+  .seg {
+    @apply inline-flex flex-wrap gap-2;
+  }
+  .seg-item {
+    @apply cursor-pointer rounded-[14px] px-3.5 py-2 text-[13px] font-semibold transition-all duration-200;
+    background: #fff;
+    color: var(--tx-sub);
+    box-shadow: inset 0 0 0 1px #e7ecf3;
+  }
+  .seg-item:hover {
+    color: #2c3646;
+    box-shadow: inset 0 0 0 1px #ffd9bd;
+  }
+  .seg-item.is-active {
+    background: var(--mc-orange);
+    color: #b46b3a;
+    box-shadow: inset 0 0 0 2px #ffc59b;
+  }
+
+  /* ---------- 3.8 进度条（营养达标率）---------- */
+  .progress-track {
+    @apply w-full overflow-hidden rounded-pill;
+    height: 10px;
+    background: #eef2f7;
+  }
+  .progress-fill {
+    @apply h-full rounded-pill;
+    transition: width 0.75s cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  .progress-ok {
+    background: linear-gradient(90deg, #7fdbb0, #10b981);
+  }
+  .progress-over {
+    background: linear-gradient(90deg, #ffb0b0, #ef4444);
+  }
+  .progress-low {
+    background: linear-gradient(90deg, #ffd98a, #f5a524);
+  }
+
+  /* ---------- 3.9 表格 ---------- */
+  .table-macaron {
+    @apply w-full border-separate;
+    border-spacing: 0 8px;
+  }
+  .table-macaron thead th {
+    @apply px-3 pb-1 text-left text-[12px] font-bold;
+    color: var(--tx-muted);
+  }
+  .table-macaron tbody tr {
+    @apply transition-all duration-200;
+  }
+  .table-macaron tbody td {
+    @apply px-3 py-2.5 text-[13px];
+    background: #fff;
+  }
+  .table-macaron tbody td:first-child {
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  }
+  .table-macaron tbody td:last-child {
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  }
+  .table-macaron tbody tr:hover td {
+    background: var(--mc-yellow);
+  }
+
+  /* ---------- 3.10 列表 / 说明块 ---------- */
+  .soft-panel {
+    @apply rounded-[18px] p-4;
+    background: #fff;
+    box-shadow: inset 0 0 0 1px #eff3f8;
+  }
+  .list-item {
+    @apply flex items-start gap-3 rounded-[14px] p-3 transition-all duration-200;
+  }
+  .list-item:hover {
+    background: rgba(255, 255, 255, 0.7);
+  }
+
+  /* 分割线 */
+  .divider {
+    height: 1px;
+    background: #eff3f8;
+    @apply my-4;
+  }
+
+  /* ---------- 3.11 滚动区域 ---------- */
+  .scroll-area {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* ---------- 3.12 骨架屏 / 加载态 ---------- */
+  .skeleton {
+    @apply rounded-[12px];
+    background: linear-gradient(90deg, #f1f4f9 25%, #e8edf5 37%, #f1f4f9 63%);
+    background-size: 400px 100%;
+    animation: shimmer 1.6s linear infinite;
+  }
+}
+
+/* =============================================================================
+ * 三·补充、布局与导航专用组件
+ * ========================================================================== */
+@layer components {
+  /* 侧边栏导航项 */
+  .nav-item {
+    @apply flex items-center gap-3 rounded-[16px] px-2.5 py-2 transition-all duration-200;
+    color: var(--tx-sub);
+  }
+  .nav-item:hover {
+    transform: translateX(3px);
+    color: #2c3646;
+  }
+  .nav-item.is-active {
+    box-shadow: 0 6px 16px rgba(31, 45, 61, 0.1);
+  }
+  .nav-title {
+    @apply truncate text-[13px] font-bold;
+  }
+  .nav-group-title {
+    @apply px-2.5 pb-1 pt-3 text-[11px] font-bold uppercase tracking-wider;
+    color: #b8c3d1;
+  }
+
+  /* 顶部栏 / 页面内的胶囊信息块 */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-pill bg-white px-3 py-1.5 text-[12px] font-semibold;
+    box-shadow: inset 0 0 0 1px #eef2f7;
+    color: var(--tx-sub);
+  }
+  .chip-strong {
+    color: #2c3646;
+  }
+
+  /* 侧边栏整体容器 */
+  .sidebar {
+    background: #ffffff;
+    border-right: 1px solid #f0f3f8;
+  }
+
+  /* 顶部栏容器 */
+  .topbar {
+    @apply flex items-center justify-between gap-4 px-7 py-4;
+    background: rgba(255, 255, 255, 0.86);
+    border-bottom: 1px solid #f0f3f8;
+    backdrop-filter: none; /* 明确不使用磨砂玻璃效果 */
+  }
+
+  /* 通用两列/三列栅格（统一间距，避免各页面各写一套） */
+  .grid-cards {
+    @apply grid gap-5;
+  }
+}
+
+/* =============================================================================
+ * 四、工具层（Utilities）
+ * ========================================================================== */
+@layer utilities {
+  /* 一行省略 / 多行省略 */
+  .ellipsis {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ellipsis-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .ellipsis-3 {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  /* 文本色快捷方式 */
+  .tx-sub {
+    color: var(--tx-sub);
+  }
+  .tx-muted {
+    color: var(--tx-muted);
+  }
+  .tx-main {
+    color: #2c3646;
+  }
+  .tx-ok {
+    color: var(--st-ok);
+  }
+  .tx-over {
+    color: var(--st-over);
+  }
+  .tx-low {
+    color: var(--st-low);
+  }
+  /* 数字使用等宽字形，避免数据跳动时抖动 */
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* =============================================================================
+ * 五、动画与过渡（全局页面淡入 + 元素入场 + 循环动效）
+ * ========================================================================== */
+
+/* 5.1 路由页面切换过渡：淡入 + 轻微上移，全站统一 */
+.page-enter-active,
+.page-leave-active {
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* 5.2 元素入场动画
+   统一使用 animation-fill-mode: backwards —— 动画结束后不保留 transform，
+   从而保证卡片自身的 hover 上浮 / 缩放动画不被覆盖。 */
+@keyframes fadeUp {
+  0% {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes popIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes slideInRight {
+  0% {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes floatY {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
+}
+@keyframes pulseSoft {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.86);
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+/* 环形进度旋转（AI 分析中） */
+@keyframes spinSlow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* 扫描线（图片识别时的“AI 扫描”动效） */
+@keyframes scanLine {
+  0% {
+    top: 0%;
+  }
+  50% {
+    top: calc(100% - 3px);
+  }
+  100% {
+    top: 0%;
+  }
+}
+
+.anim-fade-up {
+  animation: fadeUp 0.45s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+}
+.anim-pop {
+  animation: popIn 0.4s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+}
+.anim-slide-right {
+  animation: slideInRight 0.4s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+}
+.anim-float {
+  animation: floatY 4s ease-in-out infinite;
+}
+.anim-pulse-soft {
+  animation: pulseSoft 1.4s ease-in-out infinite;
+}
+.anim-spin-slow {
+  animation: spinSlow 2.4s linear infinite;
+}
+
+/* 5.3 列表 / 网格逐项延迟入场（stagger）
+   直接给父级加 .stagger 即可让子元素依次淡入 */
+.stagger > * {
+  animation: fadeUp 0.5s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+}
+.stagger > *:nth-child(1) {
+  animation-delay: 0.02s;
+}
+.stagger > *:nth-child(2) {
+  animation-delay: 0.07s;
+}
+.stagger > *:nth-child(3) {
+  animation-delay: 0.12s;
+}
+.stagger > *:nth-child(4) {
+  animation-delay: 0.17s;
+}
+.stagger > *:nth-child(5) {
+  animation-delay: 0.22s;
+}
+.stagger > *:nth-child(6) {
+  animation-delay: 0.27s;
+}
+.stagger > *:nth-child(7) {
+  animation-delay: 0.32s;
+}
+.stagger > *:nth-child(8) {
+  animation-delay: 0.37s;
+}
+.stagger > *:nth-child(9) {
+  animation-delay: 0.42s;
+}
+.stagger > *:nth-child(10) {
+  animation-delay: 0.47s;
+}
+.stagger > *:nth-child(n + 11) {
+  animation-delay: 0.52s;
+}
+
+/* 5.4 AI 图片识别：扫描线动效 */
+.scan-wrap {
+  position: relative;
+  overflow: hidden;
+}
+.scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, rgba(155, 131, 232, 0), #9b83e8, rgba(155, 131, 232, 0));
+  box-shadow: 0 0 14px 3px rgba(155, 131, 232, 0.55);
+  animation: scanLine 2s ease-in-out infinite;
+}
+
+/* 5.5 尊重用户「减少动态效果」偏好，避免眩晕 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* =============================================================================
+ * 六、移动端 Web 响应式适配
+ * --------------------------------------------------------------------------
+ * 比赛要求作品「含 PC 端 Web、移动端 Web」，因此需要保证手机浏览器可用。
+ * 布局外壳（侧边栏抽屉化、内容区留白）在 App.vue / AppSidebar.vue / AppTopbar.vue
+ * 中通过 Tailwind 的 lg: 断点处理；这里集中处理两类全局收敛规则：
+ *   ① 密集栅格在手机宽度下统一收敛为 2 列，避免小卡被压到不可读
+ *   ② 长内容横向滚动，避免窄屏被撑破
+ * 说明：本段位于 @layer 之外，优先级高于 Tailwind 的工具类，故可覆盖 grid-cols-*
+ * ========================================================================== */
+@media (max-width: 767px) {
+  /* 统计小卡 / 图表卡：3~6 列 → 2 列 */
+  .grid-cols-3,
+  .grid-cols-4,
+  .grid-cols-5,
+  .grid-cols-6 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* 标题与说明在窄屏适当缩小，避免换行过多 */
+  .page-title {
+    font-size: 20px;
+  }
+  .page-desc {
+    font-size: 12px;
+  }
+
+  /* 数据表格在窄屏横向滚动（表格内部结构保持不变） */
+  table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+}
+
+/* 触屏设备去除 hover 粘滞：点击后不应残留悬浮态样式 */
+@media (hover: none) {
+  .card-hover:hover,
+  .card-hover-static:hover {
+    transform: none;
+  }
+}

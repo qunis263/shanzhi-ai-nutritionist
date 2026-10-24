@@ -1,0 +1,37 @@
+{
+  "name": "ai-nutrition-analyst",
+  "version": "1.0.0",
+  "private": true,
+  "description": "《膳知・AI 营养分析师》- Vue3 + Vite + TailwindCSS + ECharts 前端 + 轻量 Node AI 代理（接入智谱 GLM 视觉/文本大模型，本地可解释引擎兜底）",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "ai:server": "node server/index.js",
+    "ai:verify": "node server/index.js --self-test",
+    "lint": "eslint src server --ext .js,.vue",
+    "lint:fix": "eslint src server --ext .js,.vue --fix",
+    "format": "prettier --write \"src/**/*.{js,vue,css}\" \"server/**/*.js\""
+  },
+  "dependencies": {
+    "echarts": "^5.5.1",
+    "pinia": "^2.2.8",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-vue": "^9.33.0",
+    "postcss": "^8.4.49",
+    "prettier": "^3.9.10",
+    "tailwindcss": "^3.4.17",
+    "vite": "^6.0.7"
+  }
+}
