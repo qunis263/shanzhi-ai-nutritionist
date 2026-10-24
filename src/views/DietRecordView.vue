@@ -382,38 +382,41 @@ const nickname = computed(() => userStore.profile.nickname)
             </button>
           </div>
 
-          <!-- 结果列表：可滚动，点击选中 -->
-          <div class="scroll-area mt-2 max-h-[240px] space-y-1 pr-1">
-            <div
-              v-for="food in searchResults"
-              :key="food.id"
-              class="list-item cursor-pointer"
-              :style="form.foodId === food.id ? activePickStyle : {}"
-              @click="pickFood(food)"
-            >
-              <span class="emoji-badge" aria-hidden="true">{{ food.emoji }}</span>
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-2">
-                  <span class="truncate text-[13px] font-bold tx-main">{{ food.name }}</span>
-                  <span class="tag" :class="`tag-${categoryTheme(food.category)}`">{{ food.category }}</span>
+          <!-- 结果列表：两列网格展示（移动端单列），点击选中 -->
+          <div class="scroll-area mt-2 max-h-[300px] pr-1">
+            <div class="grid grid-cols-1 gap-1.5 lg:grid-cols-2">
+              <div
+                v-for="food in searchResults"
+                :key="food.id"
+                class="list-item cursor-pointer"
+                :style="form.foodId === food.id ? activePickStyle : {}"
+                @click="pickFood(food)"
+              >
+                <span class="emoji-badge" aria-hidden="true">{{ food.emoji }}</span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="truncate text-[13px] font-bold tx-main">{{ food.name }}</span>
+                    <span class="tag shrink-0" :class="`tag-${categoryTheme(food.category)}`">{{ food.category }}</span>
+                  </div>
+                  <div class="num text-[11px] tx-muted">每 {{ food.unit }} ≈ {{ food.calories }} kcal</div>
                 </div>
-                <div class="num text-[11px] tx-muted">每 {{ food.unit }} ≈ {{ food.calories }} kcal</div>
+                <span v-if="form.foodId === food.id" class="shrink-0 text-[13px]">✅</span>
               </div>
-              <span v-if="form.foodId === food.id" class="shrink-0 text-[13px]">✅</span>
+
+              <!-- 展开更多：逐页追加，保证整库 915 条都能浏览到（跨两列） -->
+              <button v-if="hasMore" type="button" class="more-btn lg:col-span-2" @click="loadMore">
+                展开更多（还有 {{ matchedFoods.length - searchResults.length }} 条）
+              </button>
+
+              <div v-if="!searchResults.length" class="lg:col-span-2">
+                <EmptyState
+                  emoji="🔍"
+                  text="没有找到匹配的食物"
+                  sub="试试更短的关键词，或切换分类"
+                  height="120px"
+                />
+              </div>
             </div>
-
-            <!-- 展开更多：逐页追加，保证整库 915 条都能浏览到 -->
-            <button v-if="hasMore" type="button" class="more-btn" @click="loadMore">
-              展开更多（还有 {{ matchedFoods.length - searchResults.length }} 条）
-            </button>
-
-            <EmptyState
-              v-if="!searchResults.length"
-              emoji="🔍"
-              text="没有找到匹配的食物"
-              sub="试试更短的关键词，或切换分类"
-              height="120px"
-            />
           </div>
         </div>
 
