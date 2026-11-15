@@ -362,7 +362,7 @@ AI_MODEL=gpt-4o-mini
 
 ### 4.5 对话助手前端编排层
 
-文件：[src/utils/aiChat.js](../src/utils/aiChat.js)（页面唯一入口，页面不直接发请求）
+文件：[src/utils/aiChat.ts](../src/utils/aiChat.ts)（页面唯一入口，页面不直接发请求）
 
 ```js
 import { askNutritionAI, retrieveKnowledge, buildContextText, SUGGESTED_QUESTIONS } from '@/utils/aiChat'
@@ -410,21 +410,24 @@ const res = await askNutritionAI({
    与识别页同一红线：模型给出的食物名必须能绑定本地 `FOOD_DB` 才输出营养值；
    纯问答场景下若本地无依据，宁可如实说「知识库未覆盖」，也不推测。
 
-### 4.7 AI Agent（工具调用）
+### 4.7 AI Agent（规划 + 执行 + 工具调用）
 
-文件：[src/utils/aiTools.js](../src/utils/aiTools.js)
+文件：[src/utils/aiTools.ts](../src/utils/aiTools.ts)
 
 **为什么工具在前端执行**：工具所需的数据源都在浏览器端——饮食记录与饮水在 Pinia `dietStore`，
 身体档案在 `userStore`，食物营养库是前端 `FOOD_DB`（915 条）。服务端拿不到这些数据，
-因此采用「**前端 Agent 循环 + 服务端只做工具感知的模型调用**」：
+因此采用「**前端 Plan-and-Execute 编排 + 服务端只做模型调用**」。复杂任务与简单任务分流：
+
+- 复杂任务（规划、复盘、综合分析、跨天数据与膳食安排）先生成 2–5 步结构化计划；
+- 简单任务继续使用反应式 Function Calling，避免不必要的规划延迟。
 
 ```
-① 前端把 messages + tools 发给 POST /api/chat（stream=true）
-② 服务端流式转发，同时按 index 累加 delta.tool_calls，在 done 帧返回 toolCalls
-③ 前端执行工具（只读 dietStore / userStore / FOOD_DB），得到结果
-④ 前端追加 assistant(tool_calls) 与 tool(tool_call_id) 消息，回到 ①
-⑤ 模型不再请求工具时即输出最终回答；最多 4 轮，超限则去掉 tools 强制作答
-⑥ 任一步失败 → 回退本地知识库，对话不中断
+① 复杂任务判定 → 模型输出结构化行动计划（只允许白名单工具，最多 5 步）
+② 前端校验计划和参数 → 按步骤读取 dietStore / userStore / FOOD_DB
+③ 每一步实时更新 pending / running / completed / failed 状态
+④ 工具失败 → 最多一次受控重规划，历史不足时改用今日真实数据并说明局限
+⑤ 执行结果作为事实上下文交给模型做最终校验和回答
+⑥ 简单问题仍走原有 tool_calls 循环；最多 4 轮，超限则关闭工具强制作答
 ```
 
 | 工具 | 作用 | 数据源 |
@@ -445,6 +448,9 @@ const res = await askNutritionAI({
 
 页面会把每一次调用实时渲染成轨迹 chip（🛠️ 运行中 → ✅ 完成 + 结果摘要 / ⏳ 待确认），
 让「模型查了哪些真实数据、要写什么」对用户与评委全程可见。
+
+复杂任务还会展示独立的「Agent 执行计划」面板。该面板只展示目标、行动步骤、工具结果摘要与调整原因，
+不展示模型隐藏思维过程；计划最多 5 步、最多重规划 1 次，避免无限循环和不可控消耗。
 
 兼容性：若模型不支持 `tools` 而返回 400，服务端自动去掉 tools 重试一次并提示已降级为普通对话。
 
@@ -492,7 +498,7 @@ Agent 多轮工具调用因此不会被「整体超时」误中断。
 
 网络层：`ECONNREFUSED`（无法连接）、`ENOTFOUND`（域名解析失败）、`ABORT_ERR`（已超时中断）等。
 
-前端 [src/utils/aiClient.js](../src/utils/aiClient.js) 再做一层兜底映射
+前端 [src/utils/aiClient.ts](../src/utils/aiClient.ts) 再做一层兜底映射
 （`TIMEOUT` / `NETWORK` / `ABORT` 等浏览器侧错误），并区分「自身超时」与「用户主动取消」。
 
 ### 5.4 入参防御
@@ -514,7 +520,7 @@ Agent 多轮工具调用因此不会被「整体超时」误中断。
 npm run ai:verify
 ```
 
-覆盖 11 组纯函数环节共 **83 项断言**：环境变量解析与配置读取、错误码映射、
+覆盖 12 组纯函数环节共 **99 项断言**：环境变量解析与配置读取、错误码映射、
 模型输出解析（纯 JSON / 代码围栏 / 夹带文字 / 百分数 / 越界 / 空 / 非法）、
 请求体构造、Mock 确定性与命中、入参校验，以及**对话模块**（chat 请求体构造、
 对话内容归一化、对话入参校验、对话 Mock 与调用链路、未配置 Key 时的降级行为）。

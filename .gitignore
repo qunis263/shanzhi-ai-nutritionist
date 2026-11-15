@@ -17,6 +17,12 @@ pnpm-debug.log*
 .cache/
 .vite/
 
+# 本地临时产物 / 工具缓存（不随项目交付）
+output/
+.workbuddy/
+.trae-html-share-packages/
+.screenshots/
+
 # 编辑器 / 系统文件
 .vscode/*
 !.vscode/extensions.json

@@ -26,19 +26,19 @@
         theme: {
           extend: {
             colors: {
-              cream: '#fff9ef', // 浅米背景
-              warm: '#ff9f5b', // 主色暖橙
-              warmdeep: '#f2863f', // 暖橙加深（hover）
-              mint: '#86d0b0', // 辅助薄荷绿
-              mintbg: '#eaf7f1', // 薄荷绿浅底
-              ink: '#333333' // 文字深灰
+              cream: '#ffffff', // 纯白背景
+              warm: '#0f8f84', // 主色松石绿
+              warmdeep: '#0c7a71', // 松石绿加深（hover）
+              mint: '#64bdb5', // 辅助松石绿
+              mintbg: '#e8f6f4', // 松石绿浅底
+              ink: '#1d2430' // 文字炭灰
             },
             fontFamily: {
               sans: ['Inter', 'PingFang SC', 'Microsoft YaHei', 'system-ui', 'sans-serif']
             },
             boxShadow: {
-              card: '0 20px 60px rgba(255, 159, 91, 0.14), 0 4px 16px rgba(51, 51, 51, 0.06)',
-              soft: '0 6px 20px rgba(31, 45, 61, 0.07)'
+              card: '0 2px 8px rgba(16, 24, 40, 0.05), 0 4px 16px rgba(15, 143, 132, 0.08)',
+              soft: '0 1px 3px rgba(16, 24, 40, 0.05)'
             }
           }
         }
@@ -50,14 +50,14 @@
          即使断网导致 CDN 不可用，页面布局与视觉依然完整（比赛现场兜底）。 -->
     <style>
       :root {
-        --cream: #fff9ef;
-        --warm: #ff9f5b;
-        --warm-deep: #f2863f;
-        --mint: #86d0b0;
-        --mint-bg: #eaf7f1;
-        --ink: #333333;
-        --sub: #7a7468;
-        --line: #f0e7d8;
+        --cream: #ffffff;
+        --warm: #0f8f84;
+        --warm-deep: #0c7a71;
+        --mint: #64bdb5;
+        --mint-bg: #e8f6f4;
+        --ink: #1d2430;
+        --sub: #6b7382;
+        --line: #e7eaef;
       }
 
       * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -87,9 +87,9 @@
         flex-direction: column;
         justify-content: center;
         background:
-          radial-gradient(900px 520px at 8% -6%, #ffe9d2 0%, rgba(255, 233, 210, 0) 60%),
-          radial-gradient(760px 520px at 108% 112%, #dcf2e8 0%, rgba(220, 242, 232, 0) 58%),
-          linear-gradient(160deg, #fffdf8 0%, #fff9ef 55%, #fdf3e4 100%);
+          radial-gradient(900px 520px at 8% -6%, #d9efea 0%, rgba(217, 239, 234, 0) 60%),
+          radial-gradient(760px 520px at 108% 112%, #e7f6f4 0%, rgba(231, 246, 244, 0) 58%),
+          linear-gradient(160deg, #ffffff 0%, #fbfcfd 55%, #eef7f4 100%);
       }
 
       /* 矢量线稿装饰：描边低饱和，不抢文字 */
@@ -142,7 +142,7 @@
         font-weight: 900;
         line-height: 1.18;
         letter-spacing: -0.01em;
-        color: #2f2b25;
+        color: var(--ink);
       }
       .pane-left h1 .accent {
         background: linear-gradient(120deg, var(--warm) 0%, var(--warm-deep) 100%);
@@ -157,7 +157,7 @@
         font-weight: 600;
         letter-spacing: 0.28em;
         text-transform: uppercase;
-        color: #b08a5f;
+        color: var(--warm);
       }
 
       .lead {
@@ -165,17 +165,17 @@
         max-width: 560px;
         font-size: 15.5px;
         line-height: 2;
-        color: #6b655a;
+        color: var(--sub);
       }
 
       .feat-chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
       .feat-chip {
         display: inline-flex; align-items: center; gap: 7px;
         padding: 8px 15px; border-radius: 999px;
-        background: rgba(255, 255, 255, 0.8);
+        background: #fff;
         border: 1px solid var(--line);
-        font-size: 12.5px; font-weight: 600; color: #6a5f4f;
-        box-shadow: 0 3px 10px rgba(31, 45, 61, 0.04);
+        font-size: 12.5px; font-weight: 600; color: var(--sub);
+        box-shadow: 0 1px 3px rgba(16, 24, 40, 0.04);
       }
       .feat-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint); }
       .feat-chip.warm .dot { background: var(--warm); }
@@ -187,29 +187,27 @@
       .slogan-line { width: 44px; height: 3px; border-radius: 3px;
         background: linear-gradient(90deg, var(--warm), var(--mint)); }
       .slogan {
-        font-size: 17px; font-weight: 800; letter-spacing: 0.06em; color: #4a433a;
+        font-size: 17px; font-weight: 800; letter-spacing: 0.06em; color: var(--ink);
       }
       .slogan small { display: block; margin-top: 4px; font-size: 11.5px; font-weight: 500;
-        letter-spacing: 0.2em; color: #a99c87; }
+        letter-spacing: 0.2em; color: var(--sub); }
 
       /* ================= 右侧：登录注册卡片区 ================= */
       .pane-right {
         display: flex; align-items: center; justify-content: center;
         padding: 40px 32px;
         background:
-          radial-gradient(680px 420px at 110% -10%, #fdeede 0%, rgba(253, 238, 222, 0) 60%),
-          linear-gradient(180deg, #fffaf2 0%, #fdf6ea 100%);
+          radial-gradient(680px 420px at 110% -10%, #e6f6f2 0%, rgba(230, 246, 242, 0) 60%),
+          linear-gradient(180deg, #ffffff 0%, #f6faf9 100%);
       }
 
       .auth-card {
         width: 100%; max-width: 424px;
         padding: 38px 36px 30px;
-        border-radius: 28px;
-        background: rgba(255, 255, 255, 0.78);
-        backdrop-filter: blur(18px);
-        -webkit-backdrop-filter: blur(18px);
-        border: 1px solid rgba(255, 255, 255, 0.9);
-        box-shadow: 0 20px 60px rgba(255, 159, 91, 0.14), 0 4px 16px rgba(51, 51, 51, 0.06);
+        border-radius: 14px;
+        background: #ffffff;
+        border: 1px solid var(--line);
+        box-shadow: 0 2px 8px rgba(16, 24, 40, 0.05), 0 8px 28px rgba(15, 143, 132, 0.06);
         animation: cardIn 0.6s ease both;
       }
       @keyframes cardIn { from { opacity: 0; transform: translateY(16px) scale(0.99); } to { opacity: 1; transform: none; } }
@@ -217,8 +215,8 @@
       .auth-logo {
         width: 52px; height: 52px; border-radius: 16px;
         display: grid; place-items: center; font-size: 26px;
-        background: linear-gradient(135deg, #ffe2c4, #fff3e2);
-        box-shadow: inset 0 0 0 1px #ffe0bd;
+        background: linear-gradient(135deg, #e8f6f4, #eefaf8);
+      box-shadow: inset 0 0 0 1px #d0ece7;
       }
       .auth-title { margin-top: 16px; font-size: 22px; font-weight: 800; }
       .auth-sub { margin-top: 6px; font-size: 13px; color: var(--sub); }
@@ -227,13 +225,13 @@
       .tabs {
         position: relative; margin: 24px 0 22px;
         display: grid; grid-template-columns: 1fr 1fr;
-        background: #f6efe3; border-radius: 999px; padding: 4px;
+        background: #f3f5f8; border-radius: 999px; padding: 4px;
       }
       .tab-btn {
         position: relative; z-index: 2;
         border: 0; background: transparent; cursor: pointer;
         padding: 9px 0; border-radius: 999px;
-        font-size: 14px; font-weight: 700; color: #9a907e;
+        font-size: 14px; font-weight: 700; color: var(--sub);
         font-family: inherit; transition: color 0.25s;
       }
       .tab-btn.active { color: #fff; }
@@ -242,7 +240,7 @@
         width: calc(50% - 4px); height: calc(100% - 8px);
         border-radius: 999px;
         background: linear-gradient(135deg, var(--warm), var(--warm-deep));
-        box-shadow: 0 6px 14px rgba(255, 159, 91, 0.38);
+        box-shadow: 0 2px 8px rgba(15, 143, 132, 0.25);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       }
       .tabs.register-on .tab-glider { transform: translateX(100%); }
@@ -252,29 +250,29 @@
       .form-panel.active { display: block; animation: fadeUp 0.4s ease both; }
 
       .field { margin-bottom: 16px; }
-      .field-label { display: block; margin-bottom: 7px; font-size: 12.5px; font-weight: 700; color: #5c554a; }
+      .field-label { display: block; margin-bottom: 7px; font-size: 12.5px; font-weight: 700; color: var(--sub); }
       .input-wrap { position: relative; display: flex; align-items: center; }
       .input-wrap .ic {
-        position: absolute; left: 14px; width: 17px; height: 17px; color: #bdb29f;
+        position: absolute; left: 14px; width: 17px; height: 17px; color: #aeb6c2;
         transition: color 0.2s; pointer-events: none;
       }
       .field-input {
         width: 100%; height: 46px;
         padding: 0 42px 0 42px;
-        border-radius: 14px;
-        border: 1.5px solid var(--line);
-        background: #fffdf9;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fff;
         font-size: 14px; font-family: inherit; color: var(--ink);
         outline: none;
         transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
       }
-      .field-input::placeholder { color: #c3b9a8; }
-      /* hover：淡薄荷绿高亮；focus：暖橙描边 */
-      .field-input:hover { border-color: var(--mint); background: #fbfffd; }
+      .field-input::placeholder { color: #b6bdc9; }
+      /* hover：浅松石绿高亮；focus：品牌描边 */
+      .field-input:hover { border-color: var(--mint); background: #fff; }
       .field-input:focus {
         border-color: var(--warm);
         background: #fff;
-        box-shadow: 0 0 0 4px rgba(255, 159, 91, 0.13);
+        box-shadow: 0 0 0 4px rgba(15, 143, 132, 0.12);
       }
       .field-input:focus ~ .ic, .input-wrap:focus-within .ic { color: var(--warm); }
       .field.has-error .field-input { border-color: #e57878; box-shadow: 0 0 0 4px rgba(229, 120, 120, 0.1); }
@@ -284,16 +282,16 @@
       .eye-btn {
         position: absolute; right: 10px; border: 0; background: transparent;
         width: 28px; height: 28px; border-radius: 8px; cursor: pointer;
-        display: grid; place-items: center; color: #bdb29f;
+        display: grid; place-items: center; color: #aeb6c2;
       }
       .eye-btn:hover { color: var(--mint); background: var(--mint-bg); }
       .eye-btn svg { width: 17px; height: 17px; }
 
       .form-row { display: flex; align-items: center; justify-content: space-between; margin: 2px 0 18px; }
-      .remember { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; color: #6f675a; user-select: none; }
+      .remember { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; color: var(--sub); user-select: none; }
       .remember input { display: none; }
       .checkbox {
-        width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid #d9cfbd;
+        width: 17px; height: 17px; border-radius: 5px; border: 1px solid #c6cdd8;
         background: #fff; display: grid; place-items: center; transition: all 0.2s; flex: none;
       }
       .checkbox svg { width: 11px; height: 11px; color: #fff; opacity: 0; transition: opacity 0.15s; }
@@ -302,40 +300,40 @@
 
       .link-btn {
         border: 0; background: transparent; padding: 0; cursor: pointer;
-        font-size: 12.5px; font-weight: 700; color: var(--warm-deep); font-family: inherit;
+        font-size: 12.5px; font-weight: 700; color: var(--warm); font-family: inherit;
       }
-      .link-btn:hover { color: #dd6f28; text-decoration: underline; }
+      .link-btn:hover { color: var(--warm-deep); text-decoration: underline; }
 
       .btn-primary {
-        width: 100%; height: 48px; border: 0; border-radius: 14px; cursor: pointer;
+        width: 100%; height: 48px; border: 0; border-radius: 10px; cursor: pointer;
         font-family: inherit; font-size: 15px; font-weight: 800; letter-spacing: 0.04em; color: #fff;
         background: linear-gradient(135deg, var(--warm), var(--warm-deep));
-        box-shadow: 0 10px 22px rgba(255, 159, 91, 0.34);
+        box-shadow: 0 4px 14px rgba(15, 143, 132, 0.22);
         transition: transform 0.18s, box-shadow 0.18s, filter 0.18s;
       }
-      .btn-primary:hover { transform: scale(1.02); filter: brightness(1.05); box-shadow: 0 14px 28px rgba(255, 159, 91, 0.42); }
+      .btn-primary:hover { transform: scale(1.01); filter: brightness(1.03); box-shadow: 0 6px 16px rgba(15, 143, 132, 0.28); }
       .btn-primary:active { transform: scale(0.985); }
 
-      .switch-hint { margin-top: 18px; text-align: center; font-size: 12.5px; color: #8f8676; }
+      .switch-hint { margin-top: 18px; text-align: center; font-size: 12.5px; color: var(--sub); }
 
       /* 演示账号提示卡（方便评委一键填入） */
       .demo-box {
-        margin-top: 20px; padding: 12px 14px; border-radius: 14px;
-        background: var(--mint-bg); border: 1px dashed #aeddc9;
-        font-size: 12px; line-height: 1.7; color: #4c7d68;
+        margin-top: 20px; padding: 12px 14px; border-radius: 10px;
+        background: var(--mint-bg); border: 1px dashed #bcdbd5;
+        font-size: 12px; line-height: 1.7; color: #427a70;
       }
-      .demo-box b { color: #2f7a5c; }
+      .demo-box b { color: #0c7a71; }
       .demo-fill {
         margin-left: 4px; border: 0; background: transparent; cursor: pointer;
-        font-weight: 800; color: #2f9e6b; font-family: inherit; font-size: 12px;
+        font-weight: 800; color: #0f8f84; font-family: inherit; font-size: 12px;
       }
       .demo-fill:hover { text-decoration: underline; }
 
       /* 已登录提示条 */
       .logged-ribbon {
         display: none; align-items: center; gap: 10px;
-        margin-bottom: 18px; padding: 10px 14px; border-radius: 12px;
-        background: #fff4e4; border: 1px solid #ffdfb8; font-size: 12.5px; color: #9a5f24;
+        margin-bottom: 18px; padding: 10px 14px; border-radius: 10px;
+        background: #eef7f4; border: 1px solid #cfe6e0; font-size: 12.5px; color: #42665e;
       }
       .logged-ribbon.show { display: flex; }
       .logged-ribbon .spacer { flex: 1; }
@@ -343,7 +341,7 @@
       /* ---------- 页脚 ---------- */
       .page-foot {
         position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
-        font-size: 11px; color: #b8ac97; letter-spacing: 0.05em; white-space: nowrap;
+        font-size: 11px; color: #aeb6c2; letter-spacing: 0.05em; white-space: nowrap;
       }
 
       /* ---------- Toast 轻提示 ---------- */
@@ -351,12 +349,12 @@
         position: fixed; top: 26px; left: 50%; transform: translate(-50%, -16px);
         padding: 11px 22px; border-radius: 999px;
         font-size: 13px; font-weight: 700; color: #fff;
-        box-shadow: 0 12px 30px rgba(31, 45, 61, 0.2);
+        box-shadow: 0 12px 30px rgba(16, 24, 40, 0.16);
         opacity: 0; pointer-events: none; transition: all 0.3s; z-index: 99;
       }
       .toast.show { opacity: 1; transform: translate(-50%, 0); }
-      .toast.ok { background: linear-gradient(135deg, #5fc79b, #3fb184); }
-      .toast.err { background: linear-gradient(135deg, #ef7d7d, #e05f5f); }
+      .toast.ok { background: linear-gradient(135deg, var(--warm), var(--warm-deep)); }
+      .toast.err { background: linear-gradient(135deg, #e5484d, #cf3f43); }
 
       /* ================= 移动端：上下堆叠 ================= */
       @media (max-width: 900px) {
@@ -381,7 +379,7 @@
       <section class="pane-left">
         <!-- 线稿装饰①：餐盘 -->
         <div class="deco deco-1" aria-hidden="true">
-          <svg viewBox="0 0 120 120" fill="none" stroke="#e8a86f" stroke-width="2.4" stroke-linecap="round">
+          <svg viewBox="0 0 120 120" fill="none" stroke="#64bdb5" stroke-width="2.4" stroke-linecap="round">
             <circle cx="60" cy="60" r="46" />
             <circle cx="60" cy="60" r="30" stroke-dasharray="4 6" />
             <path d="M60 30v10M60 80v10M30 60h10M80 60h10" />
@@ -410,17 +408,17 @@
         <div class="deco deco-4" aria-hidden="true">
           <svg viewBox="0 0 140 140" fill="none" stroke-width="7" stroke-linecap="round">
             <g class="ring-breathe">
-              <circle cx="70" cy="70" r="52" stroke="#ffe0bd" />
-              <circle cx="70" cy="70" r="52" stroke="#ff9f5b" stroke-dasharray="245 327" transform="rotate(-90 70 70)" />
-              <circle cx="70" cy="70" r="36" stroke="#d8efe5" />
-              <circle cx="70" cy="70" r="36" stroke="#86d0b0" stroke-dasharray="150 226" transform="rotate(-90 70 70)" />
+              <circle cx="70" cy="70" r="52" stroke="#e6f6f2" />
+              <circle cx="70" cy="70" r="52" stroke="#0f8f84" stroke-dasharray="245 327" transform="rotate(-90 70 70)" />
+              <circle cx="70" cy="70" r="36" stroke="#eef7f4" />
+              <circle cx="70" cy="70" r="36" stroke="#64bdb5" stroke-dasharray="150 226" transform="rotate(-90 70 70)" />
             </g>
           </svg>
         </div>
 
         <!-- 线稿装饰⑤：小果实 -->
         <div class="deco deco-5" aria-hidden="true">
-          <svg viewBox="0 0 80 80" fill="none" stroke="#e8a86f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 80 80" fill="none" stroke="#64bdb5" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="40" cy="46" r="22" />
             <path d="M40 24c0-8 6-12 12-12M40 24c4-6 10-8 16-6" />
           </svg>
@@ -468,7 +466,7 @@
             <span>✅ 已登录为 <b id="loggedName"></b></span>
             <span class="spacer"></span>
             <button class="link-btn" id="enterAppBtn">进入应用 →</button>
-            <button class="link-btn" id="logoutBtn" style="color:#c2784a">退出</button>
+            <button class="link-btn" id="logoutBtn" style="color:var(--warm)">退出</button>
           </div>
 
           <div class="auth-logo">🥗</div>
@@ -739,8 +737,8 @@
           }
           setAuth(user, remember)
           toast('登录成功，正在进入膳知…')
-          // 回到后台首页（login.html 位于站点根，./ 即 Vue 应用入口）
-          setTimeout(function () { location.replace('./') }, 650)
+          // 回到后台首页（login.html 位于站点根，./index.html 同时兼容静态服务与 file:// 直接打开）
+          setTimeout(function () { location.replace('./index.html') }, 650)
         })
 
         /* ---------------- 注册提交 ---------------- */
@@ -775,7 +773,7 @@
           // 注册成功后自动登录进入应用
           setAuth(newUser, true)
           toast('注册成功，正在进入膳知…')
-          setTimeout(function () { location.replace('./') }, 650)
+          setTimeout(function () { location.replace('./index.html') }, 650)
         })
 
         /* ---------------- 其他交互 ---------------- */
@@ -799,7 +797,7 @@
           var ribbon = document.getElementById('loggedRibbon')
           ribbon.classList.add('show')
           document.getElementById('loggedName').textContent = auth.username
-          document.getElementById('enterAppBtn').addEventListener('click', function () { location.replace('./') })
+          document.getElementById('enterAppBtn').addEventListener('click', function () { location.replace('./index.html') })
           document.getElementById('logoutBtn').addEventListener('click', function () {
             clearAuth()
             ribbon.classList.remove('show')
