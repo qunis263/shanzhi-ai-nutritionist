@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * FoodRecognitionView AI 食物图像识别（本项目核心亮点页）
  * ------------------------------------------------------------------
@@ -26,23 +26,100 @@
  *
  * 注意：所有 setTimeout 均在 onBeforeUnmount 中清理，避免组件卸载后触发更新。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useDietStore } from '@/store/diet'
+import { usePilotStore } from '@/store/pilot'
 import PageHeader from '@/components/common/PageHeader.vue'
-import MacaronCard from '@/components/common/MacaronCard.vue'
-import StatTile from '@/components/common/StatTile.vue'
-import EmptyState from '@/components/common/EmptyState.vue'
 import { evaluateFood, NUTRIENT_META } from '@/utils/nutrition'
 import { scaleNutrition, FOOD_STATS } from '@/data/foods'
 import { RECOGNIZE_SAMPLES, hueName } from '@/utils/recognition'
 import { recognizeWithAI, probeAIService, SOURCE_LABELS } from '@/utils/aiRecognition'
 import { themeByIndex } from '@/utils/theme'
+import { celebrateStars } from '@/utils/celebrate'
 import { nowTimeStr, guessMealByNow } from '@/utils/date'
+import { saveRecognitionConsultContext } from '@/utils/multimodalContext'
+import type { AISource, FoodItem, MealType, NutrientKey, Nutrition, RecognitionCandidate } from '@/types'
+
+interface VisualFeatures {
+  ok?: boolean
+  hue?: number
+  sat?: number
+  light?: number
+  edge?: number
+  [key: string]: unknown
+}
+
+interface RecognitionEngineResult {
+  found: FoodItem
+  confidence: number
+  matchMode: string
+  reasons: string[]
+  candidates: RecognitionCandidate[]
+  features: VisualFeatures | null
+  matchedSignature: string
+  isEstimating: boolean
+  source: AISource
+  notice?: string
+  unmatchedName?: string
+}
+
+interface DisplayResult {
+  food: FoodItem
+  confidence: number
+  matchMode: string
+  reasons: string[]
+  candidates: RecognitionCandidate[]
+  features: VisualFeatures | null
+  matchedSignature: string
+  isEstimating: boolean
+  source: AISource
+  notice: string
+  unmatchedName: string
+}
+
+interface AIServiceState {
+  ok: boolean
+  mode?: string
+  model?: string
+  notice?: string
+  error?: string
+}
+
+interface RecognitionHistoryItem {
+  id: number
+  emoji: string
+  name: string
+  confidence: number
+  grams: number
+  calories: number
+  time: string
+}
+
+interface RecognitionSample {
+  emoji: string
+  clue: string
+  [key: string]: unknown
+}
+
+interface FoodEvaluation {
+  level: string
+  comment: string
+  tags: Array<{ emoji: string; label: string }>
+  [key: string]: unknown
+}
+
+const EMPTY_NUTRITION: Nutrition = { calories: 0, protein: 0, fat: 0, carb: 0, fiber: 0, sugar: 0, sodium: 0 }
 
 const dietStore = useDietStore()
+const pilotStore = usePilotStore()
+const router = useRouter()
+const mealTypes = dietStore.MEAL_TYPES as MealType[]
+const mealEmoji = dietStore.MEAL_EMOJI as Record<MealType, string>
+const sourceLabels = SOURCE_LABELS as Record<AISource, { emoji: string; text: string; tone: string }>
 
 /* ============================ 上传状态 ============================ */
-const fileInput = ref(null) // 隐藏的文件选择框
+const fileInput = ref<HTMLInputElement | null>(null) // 隐藏的文件选择框
 const previewUrl = ref('') // 预览图（FileReader 生成的 dataURL）
 const selectedEmoji = ref('') // 示例图片的 Emoji 占位（无真实图片时使用）
 const fileName = ref('') // 文件名 / 示例关键字
@@ -55,7 +132,7 @@ const hint = ref('') // 用户补充的线索（截图文件名无意义时手�
 const detecting = ref(false) // 是否识别中
 const progress = ref(0) // 识别进度（0–100）
 const stepIndex = ref(0) // 当前识别步骤索引
-const result = ref(null) // 识别结果（含食物、置信度、判定依据、候选排名）
+const result = ref<DisplayResult | null>(null) // 识别结果（含食物、置信度、判定依据、候选排名）
 const grams = ref(100) // 当前分量（克 / 毫升）
 
 /* ============================ AI 服务状态 ============================ */
@@ -66,11 +143,11 @@ const grams = ref(100) // 当前分量（克 / 毫升）
  * 页面初始化时主动探测一次，用于提示用户「代理服务是否已启动」以及当前是
  * 云端模型 / Mock 模式，避免答辩时因忘记启动代理而误以为功能失效。
  */
-const aiService = ref(null)
+const aiService = ref<AIServiceState | null>(null)
 const aiProbing = ref(false)
 
 /** 当前识别来源徽标（云端大模型 / Mock / 本地引擎） */
-const sourceBadge = computed(() => SOURCE_LABELS[result.value?.source] || null)
+const sourceBadge = computed(() => (result.value ? sourceLabels[result.value.source] || null : null))
 
 /** 是否因「模型识别结果不在本地食物库」而无法记录 */
 const cannotRecord = computed(() => Boolean(result.value?.unmatchedName))
@@ -83,16 +160,20 @@ const serviceStatus = computed(() => {
   // Mock 模式不再显示顶部横幅（用户要求移除该提示）；
   // 单条识别结果的来源徽标（☁️/🧪/🔬）仍会如实标注
   if (aiService.value.mode === 'mock') return null
-  return { tone: 'ok', emoji: '☁️', text: `云端模型已就绪：${aiService.value.model}${aiService.value.notice ? ' · ' + aiService.value.notice : ''}` }
+  return {
+    tone: 'ok',
+    emoji: '☁️',
+    text: `云端模型已就绪：${aiService.value.model}${aiService.value.notice ? ' · ' + aiService.value.notice : ''}`
+  }
 })
 
 /** 识别步骤文案（依次推进，与云端识别链路对应） */
 const STEPS = ['图像预处理与压缩', '请求云端视觉模型', '结果解析与条目绑定', '生成健康评价']
 
 /** 定时器集中管理（组件卸载时统一清理） */
-let timers = []
-let toastTimer = null
-let pendingRecognition = null // 进行中的识别 Promise
+let timers: Array<ReturnType<typeof setTimeout>> = []
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+let pendingRecognition: Promise<RecognitionEngineResult> | null = null // 进行中的识别 Promise
 
 /* ============================ 计算属性 ============================ */
 
@@ -101,19 +182,27 @@ const hasImage = computed(() => !!previewUrl.value || !!selectedEmoji.value)
 
 /** 文件大小友好展示 */
 const sizeText = computed(() =>
-  fileSize.value > 1024 * 1024 ? `${(fileSize.value / 1024 / 1024).toFixed(1)} MB` : `${Math.round(fileSize.value / 1024)} KB`
+  fileSize.value > 1024 * 1024
+    ? `${(fileSize.value / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.round(fileSize.value / 1024)} KB`
 )
 
 /** 识别结果在该分量下的实际营养值 */
-const resultNutrition = computed(() => (result.value ? scaleNutrition(result.value.food, grams.value) : null))
+const resultNutrition = computed<Nutrition>(() =>
+  result.value ? (scaleNutrition(result.value.food, grams.value) as Nutrition) : EMPTY_NUTRITION
+)
 
 /** 健康评价（标签 + 结论 + 等级） */
-const evaluation = computed(() => (result.value ? evaluateFood(result.value.food, grams.value) : null))
+const evaluation = computed<FoodEvaluation>(() =>
+  result.value
+    ? (evaluateFood(result.value.food, grams.value) as FoodEvaluation)
+    : { level: 'ok', comment: '', tags: [] }
+)
 
 /** 匹配方式的中文标签（云端大模型 / Mock / 文本线索 / 视觉特征） */
 const matchModeText = computed(() => {
   if (!result.value) return ''
-  const map = {
+  const map: Record<string, string> = {
     cloud: '云端大模型识别',
     mock: 'Mock 演示响应',
     text: '文本线索匹配',
@@ -126,22 +215,30 @@ const matchModeText = computed(() => {
 const featureText = computed(() => {
   const f = result.value?.features
   if (!f || !f.ok) return ''
-  return `主色 ${f.hue}°（${hueName(f.hue)}）· 饱和度 ${f.sat} · 明度 ${f.light} · 边缘密度 ${f.edge}`
+  return `主色 ${f.hue}°（${hueName(Number(f.hue || 0))}）· 饱和度 ${f.sat} · 明度 ${f.light} · 边缘密度 ${f.edge}`
 })
 
 /** 综合评价等级横幅配置 */
 const levelBanner = computed(() => {
   const level = evaluation.value?.level || 'ok'
-  if (level === 'bad') return { emoji: '🔴', text: '需要控制', bg: 'rgba(239, 68, 68, 0.12)', color: '#dc5252' }
-  if (level === 'warn') return { emoji: '⚠️', text: '适量即可', bg: '#fff9e6', color: '#b8801a' }
-  return { emoji: '✅', text: '推荐食用', bg: '#e6f7ef', color: '#2f9e6b' }
+  if (level === 'bad') return { emoji: '🔴', text: '需要控制', bg: '#fcede9', color: '#cf3f43' }
+  if (level === 'warn') return { emoji: '⚠️', text: '适量即可', bg: '#f9f6ec', color: '#a07b1f' }
+  return { emoji: '✅', text: '推荐食用', bg: '#eef7f4', color: '#217a5c' }
 })
 
 /** 营养数据网格（7 项：该分量实际值 + 每 100g 基准值） */
-const NUTRIENT_ORDER = ['calories', 'protein', 'fat', 'carb', 'fiber', 'sugar', 'sodium']
+const NUTRIENT_ORDER: Array<Exclude<NutrientKey, 'water'>> = [
+  'calories',
+  'protein',
+  'fat',
+  'carb',
+  'fiber',
+  'sugar',
+  'sodium'
+]
 const nutritionTiles = computed(() => {
   if (!result.value) return []
-  const n = resultNutrition.value
+  const n = resultNutrition.value as Nutrition
   const food = result.value.food
   return NUTRIENT_ORDER.map((key, i) => {
     const meta = NUTRIENT_META[key]
@@ -161,7 +258,7 @@ const nutritionTiles = computed(() => {
 const SAMPLES = RECOGNIZE_SAMPLES
 
 /* ============================ 识别历史 ============================ */
-const history = ref([])
+const history = ref<RecognitionHistoryItem[]>([])
 function clearHistory() {
   history.value = []
 }
@@ -177,17 +274,64 @@ function onPickFile() {
 }
 
 /** 文件选择变化 */
-function handleFileChange(e) {
-  const file = e.target.files && e.target.files[0]
+function handleFileChange(e: Event) {
+  const target = e.target as HTMLInputElement
+  const file = target.files && target.files[0]
   if (file) readFile(file)
-  e.target.value = '' // 允许重复选择同一文件
+  target.value = '' // 允许重复选择同一文件
+}
+
+/** 上传图片最长边上限（像素）：超过则等比缩小，降低识别请求体与云端耗时 */
+const MAX_IMAGE_EDGE = 1280
+/** 压缩后的 JPEG 质量（0–1） */
+const JPEG_QUALITY = 0.82
+
+/**
+ * 客户端压缩图片：
+ * 用 canvas 把图片等比缩放到最长边 1280px 以内，并转成 JPEG（质量 0.82）。
+ * 透明 PNG 先铺白底，避免转 JPEG 后出现黑底。
+ * 任何环节失败都返回空串，由调用方回退到原图，保证上传流程不中断。
+ * @param file 原始图片文件
+ * @returns 压缩后的 dataURL；失败时返回空串
+ */
+function compressImage(file: File): Promise<string> {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const longest = Math.max(img.naturalWidth, img.naturalHeight)
+      const scale = longest > MAX_IMAGE_EDGE ? MAX_IMAGE_EDGE / longest : 1
+      const width = Math.max(1, Math.round(img.naturalWidth * scale))
+      const height = Math.max(1, Math.round(img.naturalHeight * scale))
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return resolve('')
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, width, height)
+      ctx.drawImage(img, 0, 0, width, height)
+      try {
+        resolve(canvas.toDataURL('image/jpeg', JPEG_QUALITY))
+      } catch {
+        resolve('')
+      }
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      resolve('')
+    }
+    img.src = url
+  })
 }
 
 /**
  * 读取并校验文件：
- * 非图片提示错误；超过 8MB 提示过大；通过则用 FileReader 生成预览
+ * 非图片提示错误；超过 8MB 提示过大；通过后先做客户端压缩（最长边 1280 / JPEG 0.82），
+ * 压缩结果同时用于预览与识别请求，减小请求体；压缩失败则回退原始文件。
  */
-function readFile(file) {
+async function readFile(file: File) {
   errorMsg.value = ''
   if (!file.type.startsWith('image/')) {
     errorMsg.value = '仅支持图片文件，请上传 JPG / PNG 格式 🖼️'
@@ -197,13 +341,26 @@ function readFile(file) {
     errorMsg.value = '图片过大（超过 8MB），请压缩后重新上传 📦'
     return
   }
-  const reader = new FileReader()
-  reader.onload = () => {
-    previewUrl.value = reader.result
+
+  const applyImage = (dataUrl: string, bytes: number) => {
+    previewUrl.value = dataUrl
     selectedEmoji.value = ''
     fileName.value = file.name
-    fileSize.value = file.size
+    fileSize.value = bytes
     resetResult()
+  }
+
+  // 优先使用压缩结果：dataURL 长度 ≈ base64 字符数，按 3/4 还原为字节数
+  const compressed = await compressImage(file)
+  if (compressed) {
+    applyImage(compressed, Math.round((compressed.length * 3) / 4))
+    return
+  }
+
+  // 兜底：canvas 压缩不可用时使用原始文件
+  const reader = new FileReader()
+  reader.onload = () => {
+    applyImage(typeof reader.result === 'string' ? reader.result : '', file.size)
   }
   reader.readAsDataURL(file)
 }
@@ -217,7 +374,7 @@ function onDragLeave() {
   dragging.value = false
 }
 /** 拖拽释放：读取第一个文件 */
-function onDrop(e) {
+function onDrop(e: DragEvent) {
   dragging.value = false
   const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]
   if (file) readFile(file)
@@ -267,7 +424,11 @@ function startRecognize() {
   // ① 立即启动识别（异步，不阻塞动画）
   //    recognizeWithAI 内部流程：前端入参标准化 → 调用 Node 代理 → 智谱 GLM-4V →
   //    响应解析 → 绑定本地营养条目；任一环节失败都会自动回退本地可解释引擎。
-  pendingRecognition = recognizeWithAI(previewUrl.value || '', fileName.value, hint.value)
+  pendingRecognition = recognizeWithAI(
+    previewUrl.value || '',
+    fileName.value,
+    hint.value
+  ) as Promise<RecognitionEngineResult>
 
   // ② 4 个步骤的持续时长（毫秒），合计 2200ms
   const durations = [500, 600, 500, 600]
@@ -296,11 +457,12 @@ function startRecognize() {
  *       确保任何异常都不会让页面卡在「识别中」状态。
  */
 async function finishRecognize() {
-  let res = null
+  let res: RecognitionEngineResult | null = null
   try {
-    res = await (pendingRecognition || recognizeWithAI('', fileName.value, hint.value))
-  } catch (err) {
-    errorMsg.value = `识别过程出现异常：${err?.message || err}，请重试 🙏`
+    res = await (pendingRecognition ||
+      (recognizeWithAI('', fileName.value, hint.value) as Promise<RecognitionEngineResult>))
+  } catch (err: unknown) {
+    errorMsg.value = `识别过程出现异常：${err instanceof Error ? err.message : String(err)}，请重试 🙏`
   }
   detecting.value = false
   progress.value = 100
@@ -320,11 +482,16 @@ async function finishRecognize() {
     notice: res.notice || '',
     unmatchedName: res.unmatchedName || ''
   }
+  pilotStore.track('food_recognized', {
+    source: result.value.source,
+    foodId: result.value.food.id,
+    confidence: result.value.confidence
+  })
   pushHistory()
 }
 
 /** 点击示例：以 Emoji 占位作为「已选图片」，示例词作为文件名线索并立即识别 */
-function pickSample(sample) {
+function pickSample(sample: RecognitionSample) {
   previewUrl.value = ''
   selectedEmoji.value = sample.emoji
   fileName.value = sample.clue // 模拟「文件名包含该关键词」的照片
@@ -342,7 +509,7 @@ function pushHistory() {
   const n = scaleNutrition(result.value.food, grams.value)
   history.value.unshift({
     id: Date.now(),
-    emoji: result.value.food.emoji,
+    emoji: result.value.food.emoji || '🍽️',
     name: result.value.food.name,
     confidence: result.value.confidence,
     grams: grams.value,
@@ -353,7 +520,7 @@ function pushHistory() {
 }
 
 /** 餐段选择（默认按当前时间推断） */
-const mealType = ref(guessMealByNow())
+const mealType = ref<MealType>(guessMealByNow() as MealType)
 
 /** 加入今日饮食记录 */
 function addToDiet() {
@@ -363,40 +530,136 @@ function addToDiet() {
     showToast(`「${result.value.unmatchedName}」暂无营养数据，请先在饮食记录页手动搜索添加 ⚠️`)
     return
   }
-  const record = dietStore.addRecord({ mealType: mealType.value, food: result.value.food, grams: grams.value })
-  if (record) showToast(`已把「${record.name}」加入「${mealType.value}」记录 ✅`)
-  else showToast('添加失败，请稍后重试 😢')
+  const record = dietStore.addRecord({ mealType: mealType.value, food: result.value.food, grams: grams.value }) as {
+    name: string
+  } | null
+  if (record) {
+    showToast(`已把「${record.name}」加入「${mealType.value}」记录 ✅`)
+    celebrateStars()
+  } else showToast('添加失败，请稍后重试 😢')
+}
+
+/** 将识别结果作为一次性结构化上下文带入 AI 对话页。 */
+function consultAI() {
+  if (!result.value || cannotRecord.value) return
+  const food = result.value.food
+  saveRecognitionConsultContext({
+    foodId: food.id,
+    foodName: food.name,
+    emoji: food.emoji || '🍽️',
+    grams: grams.value,
+    confidence: result.value.confidence,
+    nutrition: { ...resultNutrition.value },
+    source: result.value.source,
+    createdAt: Date.now()
+  })
+  router.push('/chat')
 }
 
 /** 显示 toast（2 秒后自动消失，注意清理定时器） */
-function showToast(msg) {
+function showToast(msg: string) {
   toast.value = msg
-  clearTimeout(toastTimer)
+  if (toastTimer) clearTimeout(toastTimer)
   toastTimer = setTimeout(() => (toast.value = ''), 2000)
 }
 
 /** 快捷分量按钮 */
 const QUICK_GRAMS = [50, 100, 150, 200, 300]
-function setGrams(v) {
+function setGrams(v: number) {
   grams.value = v
 }
 
 /** 切换餐段 */
-function selectMeal(m) {
+function selectMeal(m: MealType) {
   mealType.value = m
 }
+
+/* ============================ 会话状态持久化 ============================ */
+/**
+ * 路由切换会卸载本页组件，识别结果与识别历史因此丢失。
+ * 这里把本次会话的识别状态写入 sessionStorage（同一标签页内有效，关闭后自动清除），
+ * 回到本页时自动恢复：识别结果、识别历史、分量、餐段、图片预览都会保留。
+ */
+const SESSION_KEY = 'shanzhi_recognize_session_v1'
+/** dataURL 超过该长度不持久化，避免触发 sessionStorage 配额上限 */
+const IMAGE_LIMIT = 1.2 * 1024 * 1024
+
+/** 保存当前识别会话 */
+function saveSession() {
+  const payload = {
+    history: history.value,
+    result: result.value,
+    grams: grams.value,
+    mealType: mealType.value,
+    hint: hint.value,
+    selectedEmoji: selectedEmoji.value,
+    fileName: fileName.value,
+    fileSize: fileSize.value,
+    previewUrl: (previewUrl.value || '').length <= IMAGE_LIMIT ? previewUrl.value : ''
+  }
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(payload))
+  } catch {
+    // 配额不足时退化为不保存预览图，优先保住识别结果与历史
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ ...payload, previewUrl: '' }))
+    } catch {
+      // 仍失败则放弃本次持久化，不影响页面功能
+    }
+  }
+}
+
+/** 恢复上次的识别会话 */
+function restoreSession() {
+  let raw = ''
+  try {
+    raw = sessionStorage.getItem(SESSION_KEY) || ''
+  } catch {
+    return
+  }
+  if (!raw) return
+  try {
+    const data = JSON.parse(raw) as {
+      history?: RecognitionHistoryItem[]
+      result?: DisplayResult
+      grams?: number
+      mealType?: MealType
+      hint?: string
+      selectedEmoji?: string
+      fileName?: string
+      fileSize?: number
+      previewUrl?: string
+    }
+    if (Array.isArray(data.history)) history.value = data.history
+    if (data.result) result.value = data.result
+    if (Number(data.grams) > 0) grams.value = Number(data.grams)
+    if (data.mealType) mealType.value = data.mealType
+    if (typeof data.hint === 'string') hint.value = data.hint
+    if (typeof data.selectedEmoji === 'string') selectedEmoji.value = data.selectedEmoji
+    if (typeof data.fileName === 'string') fileName.value = data.fileName
+    if (Number(data.fileSize) > 0) fileSize.value = Number(data.fileSize)
+    if (typeof data.previewUrl === 'string' && data.previewUrl) previewUrl.value = data.previewUrl
+  } catch {
+    // 数据损坏时忽略，使用全新会话
+  }
+}
+
+restoreSession()
+watch([history, result, grams, mealType, hint, selectedEmoji, fileName, fileSize, previewUrl], saveSession, {
+  deep: true
+})
 
 /* ============================ 生命周期清理 ============================ */
 
 /** 清理所有识别相关定时器 */
 function clearTimers() {
-  timers.forEach((t) => clearTimeout(t))
+  timers.forEach(t => clearTimeout(t))
   timers = []
 }
 
 onBeforeUnmount(() => {
   clearTimers()
-  clearTimeout(toastTimer)
+  if (toastTimer) clearTimeout(toastTimer)
 })
 
 /** 页面挂载后探测一次 AI 服务状态，提示用户当前是云端模型还是 Mock 模式 */
@@ -404,8 +667,8 @@ onMounted(async () => {
   aiProbing.value = true
   try {
     aiService.value = await probeAIService()
-  } catch (err) {
-    aiService.value = { ok: false, error: `AI 服务探测失败：${err?.message || err}` }
+  } catch (err: unknown) {
+    aiService.value = { ok: false, error: `AI 服务探测失败：${err instanceof Error ? err.message : String(err)}` }
   } finally {
     aiProbing.value = false
   }
@@ -413,420 +676,960 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="stagger">
-    <!-- ① 页面标题栏（右侧「核心亮点」标记） -->
+  <div class="recognition-flow stagger">
     <PageHeader>
       <template #extra>
-        <span class="tag tag-purple">⭐ 核心亮点</span>
+        <details class="flow-help">
+          <summary>识别说明</summary>
+          <div class="flow-help-panel">
+            <p class="font-bold tx-main">AI 如何完成识别</p>
+            <ol>
+              <li>标准化图片、文件名与补充线索。</li>
+              <li>优先请求云端视觉大模型。</li>
+              <li>将结果绑定到本地食物营养库。</li>
+              <li>网络异常时自动切换本地规则引擎。</li>
+            </ol>
+            <p>本地库包含 {{ FOOD_STATS.total }} 条食物、{{ FOOD_STATS.categories }} 个分类。识别结果建议人工确认。</p>
+          </div>
+        </details>
       </template>
     </PageHeader>
 
-    <!-- ② + ③ 主体两栏：左上传 / 右结果 -->
-    <div class="mb-5 grid gap-5 lg:grid-cols-[1fr_1.05fr]">
-      <!-- ================= 左栏：上传与识别过程 ================= -->
-      <MacaronCard theme="purple" title="上传食物照片" emoji="📷" sub="点击或拖拽上传，AI 自动识别营养">
-        <!-- 隐藏的文件选择框 -->
-        <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="handleFileChange" />
+    <main class="flow-shell">
+      <header class="flow-intro">
+        <span class="flow-eyebrow">AI 食物识别</span>
+        <h2>拍下这一餐，接下来交给 AI</h2>
+        <p>上传照片后，识别结果、营养分析和健康建议会按顺序自动展开。</p>
+      </header>
 
-        <!-- AI 服务状态条：告知当前走云端模型 / Mock 模式 / 代理未启动 -->
-        <div
-          v-if="serviceStatus"
-          class="mb-3 rounded-[12px] px-3 py-2 text-[11.5px] font-semibold"
-          :style="
-            serviceStatus.tone === 'ok'
-              ? { background: '#e6f7ef', color: '#2f9e6b' }
-              : serviceStatus.tone === 'warn'
-                ? { background: '#fff9e6', color: '#b8801a' }
-                : { background: '#f4f6fa', color: '#7b8798' }
-          "
-        >
-          <span aria-hidden="true">{{ serviceStatus.emoji }}</span> {{ serviceStatus.text }}
-        </div>
-
-        <!-- 未选择图片：虚线拖拽区 -->
-        <div
-          v-if="!hasImage"
-          class="cursor-pointer rounded-[18px] border-2 border-dashed p-8 text-center transition-all duration-200"
-          :style="dragging ? { borderColor: '#9b83e8', background: '#faf7ff' } : { borderColor: '#e7ecf3' }"
-          @click="onPickFile"
-          @dragover.prevent="onDragOver"
-          @dragleave="onDragLeave"
-          @drop.prevent="onDrop"
-        >
-          <span class="anim-float text-[44px] leading-none" aria-hidden="true">📷</span>
-          <p class="mt-2 text-[13px] font-bold tx-main">点击或拖拽上传食物照片</p>
-          <p class="mt-1 text-[12px] tx-muted">支持 JPG / PNG 格式，大小不超过 8MB</p>
-        </div>
-
-        <!-- 已选择图片：预览 + 文件信息 + 操作按钮（识别中叠加扫描线） -->
-        <div v-else>
-          <div class="scan-wrap rounded-[18px]" style="border: 1px solid #efe9ff">
-            <img v-if="previewUrl" :src="previewUrl" alt="食物照片预览" class="h-[240px] w-full object-cover" />
-            <div v-else class="grid h-[240px] place-items-center text-[80px] leading-none" aria-hidden="true">
-              {{ selectedEmoji }}
-            </div>
-            <!-- 识别中：扫描线动效 -->
-            <div v-if="detecting" class="scan-line"></div>
-          </div>
-
-          <div class="mt-3 flex items-center gap-2">
-            <span class="text-[16px]" aria-hidden="true">🖼️</span>
-            <span class="ellipsis flex-1 text-[12px] tx-main">{{ fileName || '示例图片' }}</span>
-            <span v-if="fileSize" class="num text-[11px] tx-muted">{{ sizeText }}</span>
-            <button class="btn btn-ghost btn-xs" @click="onPickFile">重新上传</button>
-            <button class="btn btn-danger-soft btn-xs" @click="resetUpload">移除</button>
-          </div>
-        </div>
-
-        <!-- 上传校验错误提示 -->
-        <p v-if="errorMsg" class="mt-3 rounded-[12px] px-3 py-2 text-[12px]" style="background: rgba(239, 68, 68, 0.1); color: #dc5252">
-          {{ errorMsg }}
-        </p>
-
-        <!-- 示例图片快捷按钮 -->
-        <p class="mt-4 flex items-center gap-1.5 text-[12px] font-semibold tx-sub">
-          <span aria-hidden="true">✨</span> 试试这些示例（含热带水果等易混淆场景）
-        </p>
-        <div class="mt-2 flex flex-wrap gap-2">
-          <button v-for="s in SAMPLES" :key="s.id" class="chip" @click="pickSample(s)">
-            <span aria-hidden="true">{{ s.emoji }}</span>{{ s.label }}
-          </button>
-        </div>
-
-        <!-- 线索补充：截图文件名常无意义（如 Snipaste_xxx.png），此处可手动补充 -->
-        <p class="mt-4 flex items-center gap-1.5 text-[12px] font-semibold tx-sub">
-          <span aria-hidden="true">🔖</span> 补充线索（可选，推荐填写）
-        </p>
-        <input
-          v-model="hint"
-          class="field mt-2"
-          type="text"
-          maxlength="20"
-          placeholder="如：榴莲 / 蛋炒饭 / 三文鱼（截图文件名无效时请填写）"
-        />
-        <p class="mt-1 text-[11px] tx-muted">
-          提示：截图工具生成的文件名（如 Snipaste_2026-08-03_09-53-44.png）不含食物信息，
-          填写线索可显著提升识别准确率；不填则完全依赖图像视觉特征比对。
-        </p>
-
-        <div class="divider"></div>
-
-        <!-- 识别过程：4 步文案 + 进度条 -->
-        <div v-if="detecting" class="soft-panel">
-          <div class="space-y-2.5">
-            <div v-for="(step, i) in STEPS" :key="step" class="flex items-center gap-2.5">
-              <span
-                class="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-bold"
-                :class="i <= stepIndex ? 'anim-pulse-soft' : ''"
-                :style="
-                  i < stepIndex
-                    ? { background: '#e6f7ef', color: '#2f9e6b' }
-                    : i === stepIndex
-                      ? { background: '#f3efff', color: '#7a5fd0' }
-                      : { background: '#f3f5f9', color: '#98a5b5' }
-                "
-              >
-                {{ i < stepIndex ? '✓' : i + 1 }}
-              </span>
-              <span class="text-[12px]" :class="i <= stepIndex ? 'font-semibold tx-main' : 'tx-muted'">{{ step }}</span>
-            </div>
-          </div>
-          <div class="progress-track mt-3" style="height: 8px">
-            <div class="progress-fill progress-ok" :style="{ width: progress + '%' }"></div>
-          </div>
-          <p class="mt-1.5 text-right text-[11px] tx-muted">AI 正在分析中… <span class="num">{{ progress }}%</span></p>
-        </div>
-
-        <!-- 开始识别按钮 -->
-        <button
-          v-else
-          class="btn btn-purple mt-4 w-full"
-          :disabled="detecting"
-          @click="startRecognize"
-        >
-          🚀 开始 AI 识别
-        </button>
-      </MacaronCard>
-
-      <!-- ================= 右栏：识别结果 ================= -->
-      <MacaronCard theme="cyan" title="AI 识别结果" emoji="🔍" sub="营养数据随分量实时联动">
-        <!-- 识别中：占位骨架 -->
-        <div v-if="detecting" class="flex flex-col items-center justify-center gap-3" style="min-height: 360px">
-          <span class="anim-spin-slow text-[44px] leading-none" aria-hidden="true">🧠</span>
-          <p class="text-[13px] font-semibold tx-sub">AI 正在解析图片，请稍候…</p>
-        </div>
-
-        <!-- 未识别：空状态 -->
-        <EmptyState
-          v-else-if="!result"
-          emoji="🍱"
-          text="还没有识别结果"
-          sub="上传或选择一张食物照片，点击「开始 AI 识别」"
-          height="360px"
-        />
-
-        <!-- 识别完成：完整结果 -->
-        <div v-else class="anim-pop">
-          <!-- 食物卡片头：Emoji + 名称 + 分类 + 置信度 + 分量 -->
-          <div class="flex items-center gap-3.5">
-            <span class="emoji-badge-lg" aria-hidden="true">{{ result.food.emoji }}</span>
-            <div class="min-w-0 flex-1">
-              <p class="text-[16px] font-extrabold tx-main">{{ result.food.name }}</p>
-              <div class="mt-1 flex flex-wrap items-center gap-2">
-                <span class="tag tag-cyan">{{ result.food.category }}</span>
-                <!-- 识别来源徽标：云端大模型 / Mock 演示 / 本地引擎 -->
-                <span
-                  v-if="sourceBadge"
-                  class="tag"
-                  :class="sourceBadge.tone === 'ok' ? 'tag-green' : sourceBadge.tone === 'warn' ? 'tag-yellow' : ''"
-                >
-                  <span aria-hidden="true">{{ sourceBadge.emoji }}</span> {{ sourceBadge.text }}
-                </span>
-                <span class="chip chip-strong">
-                  <span aria-hidden="true">🎯</span> AI 置信度 <b class="num">{{ result.confidence }}%</b>
-                </span>
-                <span class="chip">⚖️ 当前分量 <b class="num chip-strong">{{ grams }} g</b></span>
+      <div class="flow-rail">
+        <section class="flow-step is-active" :class="{ 'is-complete': hasImage }">
+          <div class="flow-marker">{{ hasImage ? '✓' : '1' }}</div>
+          <div class="flow-content">
+            <div class="flow-step-heading">
+              <div>
+                <h3>添加食物照片</h3>
+                <p>支持 JPG / PNG，单张不超过 8MB</p>
               </div>
+              <button v-if="hasImage" class="btn btn-ghost btn-xs" type="button" @click="onPickFile">更换照片</button>
             </div>
-          </div>
-          <p class="mt-2 text-[11px] tx-muted">
-            匹配方式：{{ matchModeText }} · 每 100g 基准营养来自本地食物数据库（共 {{ FOOD_STATS.total }} 条）
-          </p>
 
-          <!-- 降级提示：云端调用失败已回退本地引擎时如实告知（不隐瞒） -->
-          <p
-            v-if="result.notice"
-            class="mt-2 rounded-[12px] px-3 py-2 text-[11.5px] font-semibold"
-            style="background: #fff9e6; color: #b8801a"
-          >
-            ⚠️ {{ result.notice }}
-          </p>
-
-          <!-- 未匹配提示：模型识别结果不在本地食物库，无营养数据可记录 -->
-          <div
-            v-if="result.unmatchedName"
-            class="mt-2 rounded-[12px] px-3 py-2.5 text-[11.5px]"
-            style="background: rgba(239, 68, 68, 0.08); color: #dc5252"
-          >
-            <p class="font-bold">⚠️ 模型识别为「{{ result.unmatchedName }}」，但本地食物库暂无该条目</p>
-            <p class="mt-1 opacity-90">
-              下方展示的是最接近的「{{ result.food.name }}」营养参数，仅作参考；如需记录，请到饮食记录页手动搜索添加。
-            </p>
-          </div>
-
-          <!-- 判定依据：把「为什么是它」摊开给用户看（可解释 AI） -->
-          <div class="soft-panel mt-3">
-            <p class="text-[12px] font-bold tx-main">🔬 识别判定依据</p>
-            <p v-if="featureText" class="mt-1 text-[11px] tx-sub">图像特征：{{ featureText }}</p>
-            <ul class="mt-2 space-y-1.5">
-              <li v-for="(r, i) in result.reasons" :key="i" class="flex gap-1.5 text-[11px] tx-sub">
-                <span aria-hidden="true">·</span><span>{{ r }}</span>
-              </li>
-            </ul>
-          </div>
-
-          <!-- 候选排名：模型候选（☁️）与本地视觉候选（🔬）交叉展示，体现「打分排序」而非「随机抽取」 -->
-          <div class="mt-3">
-            <p class="text-[12px] font-bold tx-main">📋 候选排名（Top 5）</p>
-            <div class="mt-2 space-y-1.5">
-              <div v-for="(c, i) in result.candidates" :key="c.food.id" class="flex items-center gap-2">
-                <span class="num w-4 shrink-0 text-[11px] tx-muted">{{ i + 1 }}</span>
-                <span class="shrink-0" aria-hidden="true">{{ c.food.emoji }}</span>
-                <span class="ellipsis w-[86px] shrink-0 text-[11px]" :class="i === 0 ? 'font-bold tx-main' : 'tx-sub'">
-                  {{ c.food.name }}
-                </span>
-                <span class="shrink-0 text-[10px]" :title="c.fromModel ? '来自云端模型候选' : '来自本地视觉特征候选'">
-                  {{ c.fromModel ? '☁️' : '🔬' }}
-                </span>
-                <div class="progress-track flex-1" style="height: 7px">
-                  <div
-                    class="progress-fill"
-                    :class="i === 0 ? 'progress-ok' : ''"
-                    :style="{ width: Math.max(4, Math.round(c.score)) + '%', background: i === 0 ? '' : '#c7d2e0' }"
-                  ></div>
-                </div>
-                <span class="num w-8 shrink-0 text-right text-[11px] tx-muted">{{ Math.round(c.score) }}</span>
-              </div>
+            <div v-if="serviceStatus" class="flow-service" :class="`is-${serviceStatus.tone}`">
+              <span aria-hidden="true">{{ serviceStatus.emoji }}</span
+              >{{ serviceStatus.text }}
             </div>
-          </div>
 
-          <div class="divider"></div>
-
-          <!-- 分量调节：滑杆 + 数字输入 + 快捷按钮 -->
-          <p class="field-label">🍽️ 分量调节（20–500g）</p>
-          <div class="flex items-center gap-3">
-            <input v-model.number="grams" type="range" min="20" max="500" step="10" class="flex-1 accent-purple-400" />
-            <input v-model.number="grams" type="number" min="20" max="500" step="10" class="field w-[92px] text-center" />
-            <span class="text-[12px] tx-muted">g</span>
-          </div>
-          <div class="mt-2 flex flex-wrap gap-2">
-            <button v-for="g in QUICK_GRAMS" :key="g" class="btn btn-ghost btn-xs" @click="setGrams(g)">{{ g }}g</button>
-          </div>
-
-          <!-- 营养数据网格 -->
-          <p class="field-label mt-4">📊 该分量下的营养数据</p>
-          <div class="grid grid-cols-4 gap-3">
-            <StatTile
-              v-for="tile in nutritionTiles"
-              :key="tile.key"
-              :theme="tile.theme"
-              :label="tile.label"
-              :emoji="tile.emoji"
-              :value="tile.value"
-              :unit="tile.unit"
+            <div
+              v-if="!hasImage"
+              class="flow-dropzone"
+              :class="{ 'is-dragging': dragging }"
+              role="button"
+              @click="onPickFile"
+              @dragover.prevent="onDragOver"
+              @dragleave="onDragLeave"
+              @drop.prevent="onDrop"
             >
-              每100g：<span class="num">{{ tile.base }}{{ tile.unit }}</span>
-            </StatTile>
-          </div>
-
-          <div class="divider"></div>
-
-          <!-- 健康评价：标签 + 结论 -->
-          <p class="field-label">🤖 AI 健康评价</p>
-          <div class="soft-panel">
-            <!-- 标签：危险红色 / 优质绿色 / 中性灰色 -->
-            <div class="flex flex-wrap gap-2">
-              <span
-                v-for="(tag, i) in evaluation.tags"
-                :key="i"
-                :class="tag.type === 'danger' ? 'badge badge-over' : tag.type === 'good' ? 'badge badge-ok' : 'tag'"
-              >
-                <span aria-hidden="true">{{ tag.emoji }}</span>{{ tag.label }}
-              </span>
+              <span class="flow-upload-icon" aria-hidden="true">＋</span>
+              <strong>拖入照片，或从相册选择</strong>
+              <span>清晰、完整的餐盘照片识别效果更好</span>
+              <button class="btn btn-primary" type="button" @click.stop="onPickFile">选择食物照片</button>
             </div>
-            <p class="mt-3 text-[12px] leading-relaxed tx-sub">{{ evaluation.comment }}</p>
-          </div>
 
-          <!-- 综合评价等级横幅 -->
-          <div
-            class="mt-3 flex items-center gap-2.5 rounded-[16px] px-4 py-3"
-            :style="{ background: levelBanner.bg, color: levelBanner.color }"
-          >
-            <span class="text-[20px]" aria-hidden="true">{{ levelBanner.emoji }}</span>
-            <div>
-              <p class="text-[13px] font-bold">综合结论：{{ levelBanner.text }}</p>
-              <p class="text-[11px] opacity-80">基于高脂 / 高糖 / 高热量 / 高钠等风险规则自动判定</p>
+            <div v-else class="flow-photo-row">
+              <div class="scan-wrap flow-photo">
+                <img v-if="previewUrl" :src="previewUrl" alt="食物照片预览" />
+                <div v-else class="flow-sample-emoji" aria-hidden="true">{{ selectedEmoji }}</div>
+                <div v-if="detecting" class="scan-line"></div>
+              </div>
+              <div class="flow-photo-meta">
+                <strong>{{ fileName || '示例图片' }}</strong>
+                <span v-if="fileSize" class="num">{{ sizeText }}</span>
+                <span v-else>已准备识别</span>
+                <button class="flow-text-action" type="button" @click="resetUpload">移除</button>
+              </div>
             </div>
-          </div>
 
-          <div class="divider"></div>
+            <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="handleFileChange" />
+            <p v-if="errorMsg" class="flow-error" role="alert">{{ errorMsg }}</p>
 
-          <!-- 加入今日饮食记录：餐段选择 + 按钮 + 成功提示 -->
-          <p class="field-label">➕ 加入今日饮食记录</p>
-          <div class="flex flex-wrap items-center gap-3">
-            <div class="seg">
-              <button
-                v-for="meal in dietStore.MEAL_TYPES"
-                :key="meal"
-                class="seg-item"
-                :class="{ 'is-active': mealType === meal }"
-                @click="selectMeal(meal)"
-              >
-                {{ dietStore.MEAL_EMOJI[meal] }} {{ meal }}
+            <div v-if="!hasImage" class="flow-examples">
+              <span>没有照片？试试示例</span>
+              <button v-for="s in SAMPLES" :key="s.id" class="flow-example" type="button" @click="pickSample(s)">
+                <span aria-hidden="true">{{ s.emoji }}</span
+                >{{ s.label }}
               </button>
             </div>
-            <button class="btn btn-green ml-auto" :disabled="cannotRecord" @click="addToDiet">➕ 加入记录</button>
-          </div>
 
-          <!-- toast 成功提示条 -->
-          <p
-            v-if="toast"
-            class="anim-fade-up mt-3 rounded-[12px] px-3.5 py-2.5 text-[12px] font-semibold"
-            style="background: #e6f7ef; color: #2f9e6b"
+            <details v-if="hasImage" class="flow-clue">
+              <summary>补充食物线索 <span>可选</span></summary>
+              <div>
+                <input v-model="hint" class="field" type="text" maxlength="20" placeholder="如：榴莲、蛋炒饭、三文鱼" />
+                <p>当截图文件名不含食物信息时，补充线索可提高识别准确率。</p>
+              </div>
+            </details>
+
+            <button
+              v-if="hasImage && !detecting && !result"
+              class="btn btn-primary flow-primary-action"
+              type="button"
+              @click="startRecognize"
+            >
+              开始 AI 识别
+            </button>
+          </div>
+        </section>
+
+        <Transition name="flow-reveal">
+          <section v-if="detecting" class="flow-step is-active">
+            <div class="flow-marker">2</div>
+            <div class="flow-content">
+              <div class="flow-step-heading">
+                <div>
+                  <h3>正在分析图片</h3>
+                  <p>{{ STEPS[stepIndex] }}</p>
+                </div>
+                <strong class="flow-progress-value num">{{ progress }}%</strong>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill progress-ok" :style="{ width: progress + '%' }"></div>
+              </div>
+              <div class="flow-detect-steps">
+                <span
+                  v-for="(step, i) in STEPS"
+                  :key="step"
+                  :class="{ 'is-done': i < stepIndex, 'is-current': i === stepIndex }"
+                >
+                  {{ i < stepIndex ? '✓' : i + 1 }} {{ step }}
+                </span>
+              </div>
+            </div>
+          </section>
+        </Transition>
+
+        <Transition name="flow-reveal">
+          <section v-if="result" class="flow-step is-active is-complete">
+            <div class="flow-marker">✓</div>
+            <div class="flow-content">
+              <div class="flow-step-heading">
+                <div>
+                  <h3>确认识别结果</h3>
+                  <p>核对食物名称，并调整实际食用分量</p>
+                </div>
+                <span class="flow-confidence num">{{ result.confidence }}% 置信度</span>
+              </div>
+
+              <div class="flow-result-hero">
+                <div class="flow-result-food">
+                  <span class="flow-food-emoji" aria-hidden="true">{{ result.food.emoji }}</span>
+                  <div>
+                    <h2>{{ result.food.name }}</h2>
+                    <div class="flow-result-tags">
+                      <span>{{ result.food.category }}</span>
+                      <span v-if="sourceBadge">{{ sourceBadge.emoji }} {{ sourceBadge.text }}</span>
+                      <span>{{ matchModeText }}</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="flow-result-actions">
+                  <button
+                    class="btn btn-primary btn-xs"
+                    type="button"
+                    :disabled="cannotRecord"
+                    title="带着本次识别结果咨询 AI 营养助手"
+                    @click="consultAI"
+                  >
+                    💬 咨询 AI
+                  </button>
+                  <button class="btn btn-ghost btn-xs" type="button" @click="resetUpload">重新识别</button>
+                </div>
+              </div>
+
+              <p v-if="result.notice" class="flow-notice">⚠️ {{ result.notice }}</p>
+              <div v-if="result.unmatchedName" class="flow-error">
+                <strong>模型识别为“{{ result.unmatchedName }}”，但本地食物库暂无该条目。</strong>
+                当前展示最接近的“{{ result.food.name }}”数据，仅供参考，暂不能写入记录。
+              </div>
+
+              <div class="flow-portion">
+                <div class="flow-control-label">
+                  <strong>实际食用分量</strong><span class="num">{{ grams }} g</span>
+                </div>
+                <input v-model.number="grams" aria-label="食用分量" type="range" min="20" max="500" step="10" />
+                <div class="flow-quick-grams">
+                  <button
+                    v-for="g in QUICK_GRAMS"
+                    :key="g"
+                    type="button"
+                    :class="{ 'is-selected': grams === g }"
+                    @click="setGrams(g)"
+                  >
+                    {{ g }}g
+                  </button>
+                </div>
+              </div>
+
+              <details class="flow-details">
+                <summary>查看识别依据与候选结果</summary>
+                <div class="flow-details-body">
+                  <p v-if="featureText">图像特征：{{ featureText }}</p>
+                  <ul>
+                    <li v-for="(reason, i) in result.reasons" :key="i">{{ reason }}</li>
+                  </ul>
+                  <div class="flow-candidates">
+                    <div v-for="(candidate, i) in result.candidates" :key="candidate.food.id">
+                      <span>{{ i + 1 }}. {{ candidate.food.emoji }} {{ candidate.food.name }}</span>
+                      <strong class="num">{{ Math.round(candidate.score) }}</strong>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </div>
+          </section>
+        </Transition>
+
+        <Transition name="flow-reveal">
+          <section v-if="result" class="flow-step is-active is-complete">
+            <div class="flow-marker">✓</div>
+            <div class="flow-content">
+              <div class="flow-step-heading">
+                <div>
+                  <h3>营养分析</h3>
+                  <p>数据会随食用分量实时更新</p>
+                </div>
+              </div>
+              <div class="flow-calorie-line">
+                <div>
+                  <strong class="num">{{ Math.round(resultNutrition.calories) }}</strong
+                  ><span>千卡</span>
+                </div>
+                <p>约占一顿正餐建议热量的 {{ Math.min(100, Math.round(resultNutrition.calories / 7)) }}%</p>
+              </div>
+              <div class="flow-nutrients">
+                <div v-for="tile in nutritionTiles" :key="tile.key">
+                  <span>{{ tile.label }}</span>
+                  <strong class="num"
+                    >{{ tile.value }}<small>{{ tile.unit }}</small></strong
+                  >
+                  <small>每100g {{ tile.base }}{{ tile.unit }}</small>
+                </div>
+              </div>
+            </div>
+          </section>
+        </Transition>
+
+        <Transition name="flow-reveal">
+          <section v-if="result" class="flow-step is-active is-complete">
+            <div class="flow-marker">✓</div>
+            <div class="flow-content">
+              <div class="flow-step-heading">
+                <div>
+                  <h3>健康建议</h3>
+                  <p>结合营养规则给出本餐建议</p>
+                </div>
+              </div>
+              <div class="flow-advice" :style="{ '--advice-color': levelBanner.color, '--advice-bg': levelBanner.bg }">
+                <span class="flow-advice-icon" aria-hidden="true">{{ levelBanner.emoji }}</span>
+                <div>
+                  <strong>{{ levelBanner.text }}</strong>
+                  <p>{{ evaluation.comment }}</p>
+                  <div class="flow-advice-tags">
+                    <span v-for="(tag, i) in evaluation.tags" :key="i">{{ tag.emoji }} {{ tag.label }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </Transition>
+
+        <Transition name="flow-reveal">
+          <section v-if="result" class="flow-step is-active flow-final-step">
+            <div class="flow-marker">5</div>
+            <div class="flow-content">
+              <div class="flow-step-heading">
+                <div>
+                  <h3>保存到今日饮食</h3>
+                  <p>选择餐段，完成本次记录</p>
+                </div>
+              </div>
+              <div class="flow-save-row">
+                <div class="seg">
+                  <button
+                    v-for="meal in mealTypes"
+                    :key="meal"
+                    class="seg-item"
+                    :class="{ 'is-active': mealType === meal }"
+                    type="button"
+                    @click="selectMeal(meal)"
+                  >
+                    {{ mealEmoji[meal] }} {{ meal }}
+                  </button>
+                </div>
+                <button class="btn btn-primary" type="button" :disabled="cannotRecord" @click="addToDiet">
+                  确认并记录
+                </button>
+              </div>
+              <p v-if="toast" class="flow-toast" aria-live="polite">{{ toast }}</p>
+            </div>
+          </section>
+        </Transition>
+      </div>
+
+      <details class="flow-history">
+        <summary>
+          <span
+            ><strong>本次会话识别历史</strong
+            ><small>{{ history.length ? `最近 ${history.length} 条` : '暂无记录' }}</small></span
           >
-            {{ toast }}
-          </p>
-        </div>
-      </MacaronCard>
-    </div>
-
-    <!-- ④ 底部：识别历史 + AI 识别原理说明 -->
-    <div class="grid gap-5 lg:grid-cols-[1.5fr_1fr]">
-      <!-- 本次会话识别历史（mc-yellow） -->
-      <MacaronCard theme="yellow" title="本次会话识别历史" emoji="🕘" sub="最近 8 次识别记录">
-        <template #extra>
-          <button class="btn btn-ghost btn-xs" :disabled="!history.length" @click="clearHistory">🗑️ 清空历史</button>
-        </template>
-
-        <div v-if="history.length" class="scroll-area no-scrollbar" style="max-height: 320px">
-          <table class="table-macaron">
-            <thead>
-              <tr>
-                <th>食物</th>
-                <th>置信度</th>
-                <th>分量</th>
-                <th>热量</th>
-                <th>时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in history" :key="row.id">
-                <td>
-                  <span class="mr-1.5" aria-hidden="true">{{ row.emoji }}</span>{{ row.name }}
-                </td>
-                <td class="num">{{ row.confidence }}%</td>
-                <td class="num">{{ row.grams }} g</td>
-                <td class="num">{{ row.calories }} kcal</td>
-                <td class="tx-muted">{{ row.time }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <EmptyState v-else emoji="📭" text="暂无识别记录" sub="每完成一次识别，这里会自动记录" height="160px" />
-      </MacaronCard>
-
-      <!-- AI 识别原理说明（mc-blue） -->
-      <MacaronCard theme="blue" title="AI 识别原理说明" emoji="🧠" sub="答辩讲解要点">
-        <ul class="space-y-3">
-          <li class="list-item">
-            <span class="emoji-badge mc-blue" aria-hidden="true">1️⃣</span>
-            <div>
-              <p class="text-[12px] font-bold tx-main">前端参数标准化</p>
-              <p class="text-[12px] tx-sub">图片转为 dataURL，文件名与用户输入归一化为线索词，组装成统一入参 { image, hint, clues }。</p>
-            </div>
-          </li>
-          <li class="list-item">
-            <span class="emoji-badge mc-green" aria-hidden="true">2️⃣</span>
-            <div>
-              <p class="text-[12px] font-bold tx-main">云端视觉大模型（智谱 GLM-4V）</p>
-              <p class="text-[12px] tx-sub">请求经本地 Node 代理转发到 OpenAI 兼容端点，<b>API Key 只保存在服务端</b>，绝不打包进前端产物。</p>
-            </div>
-          </li>
-          <li class="list-item">
-            <span class="emoji-badge mc-purple" aria-hidden="true">3️⃣</span>
-            <div>
-              <p class="text-[12px] font-bold tx-main">结果解析与条目绑定</p>
-              <p class="text-[12px] tx-sub">把模型返回解析为结构化字段，再用模糊检索把食物名绑定到本地食物库条目，从而取到可信的每 100g 营养参数。</p>
-            </div>
-          </li>
-          <li class="list-item">
-            <span class="emoji-badge mc-yellow" aria-hidden="true">4️⃣</span>
-            <div>
-              <p class="text-[12px] font-bold tx-main">降级兜底与可解释层</p>
-              <p class="text-[12px] tx-sub">超时 / 限流 / 断网时自动回退本地可解释规则引擎，输出判定依据与候选排名，保证演示永不中断。</p>
-            </div>
-          </li>
-        </ul>
-
-        <!-- 数据规模说明 -->
-        <div class="soft-panel mt-3">
-          <p class="text-[12px] font-bold tx-main">📚 本地食物数据库规模</p>
-          <div class="mt-2 grid grid-cols-2 gap-2 text-[11px] tx-sub">
-            <p>条目总数：<b class="num tx-main">{{ FOOD_STATS.total }}</b> 条</p>
-            <p>分类数：<b class="num tx-main">{{ FOOD_STATS.categories }}</b> 个</p>
-            <p>标签数：<b class="num tx-main">{{ FOOD_STATS.tags }}</b> 个</p>
-            <p>组合推算：<b class="num tx-main">{{ FOOD_STATS.generated }}</b> 条</p>
+          <span>展开查看</span>
+        </summary>
+        <div v-if="history.length" class="flow-history-body">
+          <div v-for="row in history" :key="row.id" class="flow-history-row">
+            <span class="flow-history-food"
+              ><b aria-hidden="true">{{ row.emoji }}</b
+              >{{ row.name }}</span
+            >
+            <span class="num">{{ row.grams }}g</span><span class="num">{{ row.calories }} kcal</span
+            ><span>{{ row.time }}</span>
           </div>
+          <button class="flow-text-action" type="button" @click="clearHistory">清空历史</button>
         </div>
-
-        <p class="mt-3 text-[11px] tx-muted">
-          💡 诚实说明：本项目已接入**真实云端视觉大模型**（智谱 GLM-4V，OpenAI 兼容端点），
-          密钥由 Node 代理服务持有、不下发到浏览器；本地可解释规则引擎作为兜底层保留。
-          本项目**不包含模型训练流程**，因此不宣称「训练准确率」——页面上的置信度来自模型自评
-          与本地引擎的交叉验证，识别结果仍建议人工确认。
-        </p>
-      </MacaronCard>
-    </div>
+        <p v-else class="flow-history-empty">每完成一次识别，记录会自动保存在这里。</p>
+      </details>
+    </main>
   </div>
 </template>
+
+<style scoped>
+.recognition-flow {
+  --flow-accent: var(--brand);
+}
+.flow-shell {
+  width: min(820px, 100%);
+  margin: 0 auto;
+  padding: 18px 0 56px;
+}
+.flow-intro {
+  margin-bottom: 34px;
+}
+.flow-eyebrow {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: var(--flow-accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+.flow-intro h2 {
+  color: var(--ink);
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.flow-intro p {
+  margin-top: 8px;
+  color: var(--tx-sub);
+  font-size: 14px;
+}
+.flow-help {
+  position: relative;
+}
+.flow-help summary {
+  color: var(--tx-sub);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.flow-help summary::-webkit-details-marker {
+  display: none;
+}
+.flow-help-panel {
+  position: absolute;
+  z-index: 20;
+  top: 30px;
+  right: 0;
+  width: min(360px, 80vw);
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow-cardHover);
+  font-size: 12px;
+  color: var(--tx-sub);
+}
+.flow-help-panel ol {
+  margin: 10px 0;
+  padding-left: 18px;
+  line-height: 1.9;
+}
+.flow-rail {
+  position: relative;
+}
+.flow-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 16px;
+  padding-bottom: 30px;
+}
+.flow-step::before {
+  content: '';
+  position: absolute;
+  left: 20px;
+  top: 42px;
+  bottom: 0;
+  width: 1px;
+  background: var(--line-strong);
+}
+.flow-final-step::before {
+  display: none;
+}
+.flow-marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--tx-muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+.flow-step.is-active .flow-marker {
+  border-color: var(--flow-accent);
+  color: var(--flow-accent);
+}
+.flow-step.is-complete .flow-marker {
+  background: var(--flow-accent);
+  color: #fff;
+}
+.flow-content {
+  min-width: 0;
+  padding-top: 3px;
+}
+.flow-step-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.flow-step-heading h3 {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 800;
+}
+.flow-step-heading p {
+  margin-top: 3px;
+  color: var(--tx-muted);
+  font-size: 12px;
+}
+.flow-service {
+  display: flex;
+  gap: 7px;
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: #f4f6fa;
+  color: var(--tx-sub);
+  font-size: 11px;
+  font-weight: 700;
+}
+.flow-service.is-ok {
+  background: #eef7f4;
+  color: #217a5c;
+}
+.flow-service.is-warn {
+  background: #f9f6ec;
+  color: #8a6c20;
+}
+.flow-dropzone {
+  min-height: 250px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  padding: 26px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: 8px;
+  background: #fff;
+  text-align: center;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+.flow-dropzone:hover,
+.flow-dropzone.is-dragging {
+  border-color: var(--flow-accent);
+  background: var(--brand-soft);
+}
+.flow-dropzone > span {
+  color: var(--tx-muted);
+  font-size: 12px;
+}
+.flow-upload-icon {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brand-soft);
+  color: var(--flow-accent) !important;
+  font-size: 26px !important;
+  font-weight: 300;
+}
+.flow-dropzone .btn {
+  margin-top: 9px;
+}
+.flow-photo-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 300px) 1fr;
+  gap: 18px;
+  align-items: center;
+}
+.flow-photo {
+  height: 190px;
+  border-radius: 8px;
+  background: #f5f6f8;
+}
+.flow-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.flow-sample-emoji {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 72px;
+}
+.flow-photo-meta {
+  min-width: 0;
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  color: var(--tx-muted);
+  font-size: 12px;
+}
+.flow-photo-meta strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.flow-text-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--flow-accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+.flow-error,
+.flow-notice {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.flow-error {
+  background: #fcede9;
+  color: #b63e42;
+}
+.flow-notice {
+  background: #f9f6ec;
+  color: #8a6c20;
+}
+.flow-examples {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.flow-example {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--tx-sub);
+  font-size: 12px;
+}
+.flow-clue {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.flow-clue summary,
+.flow-details summary {
+  padding: 12px 0;
+  color: var(--tx-sub);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.flow-clue summary span {
+  margin-left: 4px;
+  color: var(--tx-muted);
+  font-weight: 400;
+}
+.flow-clue > div {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+.flow-clue p {
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.flow-primary-action {
+  width: 100%;
+  margin-top: 18px;
+  min-height: 46px;
+}
+.flow-progress-value {
+  color: var(--flow-accent);
+  font-size: 15px;
+}
+.flow-detect-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 12px;
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.flow-detect-steps .is-current {
+  color: var(--flow-accent);
+  font-weight: 700;
+}
+.flow-detect-steps .is-done {
+  color: var(--st-ok);
+}
+.flow-confidence {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--flow-accent);
+  font-size: 11px;
+  font-weight: 800;
+}
+.flow-result-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 0;
+  border-block: 1px solid var(--line);
+}
+.flow-result-food {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.flow-food-emoji {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  background: #f5f6f8;
+  font-size: 28px;
+}
+.flow-result-food h2 {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 800;
+}
+.flow-result-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+.flow-result-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.flow-result-tags span,
+.flow-advice-tags span {
+  padding: 4px 7px;
+  border-radius: 4px;
+  background: #f2f4f7;
+  color: var(--tx-sub);
+  font-size: 10px;
+  font-weight: 700;
+}
+.flow-portion {
+  margin-top: 18px;
+}
+.flow-control-label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  color: var(--tx-sub);
+  font-size: 12px;
+}
+.flow-control-label span {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 800;
+}
+.flow-portion input[type='range'] {
+  width: 100%;
+  accent-color: var(--flow-accent);
+}
+.flow-quick-grams {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 8px;
+}
+.flow-quick-grams button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--tx-sub);
+  font-size: 11px;
+}
+.flow-quick-grams button.is-selected {
+  border-color: var(--flow-accent);
+  background: var(--brand-soft);
+  color: var(--flow-accent);
+  font-weight: 800;
+}
+.flow-details {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.flow-details-body {
+  padding: 4px 0 10px;
+  color: var(--tx-sub);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.flow-details-body ul {
+  margin: 8px 0;
+  padding-left: 18px;
+}
+.flow-candidates {
+  display: grid;
+  gap: 5px;
+}
+.flow-candidates > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 8px;
+  background: #f7f8fa;
+}
+.flow-calorie-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 0;
+  border-block: 1px solid var(--line);
+}
+.flow-calorie-line strong {
+  color: var(--ink);
+  font-size: 36px;
+}
+.flow-calorie-line span {
+  margin-left: 6px;
+  color: var(--tx-sub);
+  font-size: 12px;
+}
+.flow-calorie-line p {
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.flow-nutrients {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  margin-top: 16px;
+  background: var(--line);
+}
+.flow-nutrients > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 13px;
+  background: #fff;
+}
+.flow-nutrients span,
+.flow-nutrients > div > small {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.flow-nutrients strong {
+  color: var(--ink);
+  font-size: 17px;
+}
+.flow-nutrients strong small {
+  margin-left: 2px;
+  color: var(--tx-sub);
+  font-size: 10px;
+}
+.flow-advice {
+  display: flex;
+  gap: 14px;
+  padding: 18px;
+  border-left: 3px solid var(--advice-color);
+  background: var(--advice-bg);
+}
+.flow-advice-icon {
+  font-size: 24px;
+}
+.flow-advice strong {
+  color: var(--advice-color);
+  font-size: 15px;
+}
+.flow-advice p {
+  margin-top: 6px;
+  color: var(--tx-sub);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.flow-advice-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.flow-save-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.flow-toast {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #eef7f4;
+  color: #217a5c;
+  font-size: 12px;
+  font-weight: 700;
+}
+.flow-history {
+  margin-left: 58px;
+  border-top: 1px solid var(--line);
+}
+.flow-history > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 0;
+  color: var(--tx-sub);
+  font-size: 12px;
+  cursor: pointer;
+}
+.flow-history > summary span:first-child {
+  display: grid;
+  gap: 3px;
+}
+.flow-history > summary strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+.flow-history > summary small {
+  color: var(--tx-muted);
+}
+.flow-history-body {
+  padding-bottom: 18px;
+}
+.flow-history-row {
+  display: grid;
+  grid-template-columns: 1fr 70px 90px 60px;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--tx-sub);
+  font-size: 11px;
+}
+.flow-history-food {
+  color: var(--ink);
+  font-weight: 700;
+}
+.flow-history-food b {
+  margin-right: 7px;
+}
+.flow-history-empty {
+  padding-bottom: 18px;
+  color: var(--tx-muted);
+  font-size: 12px;
+}
+.flow-reveal-enter-active {
+  transition:
+    opacity 0.38s ease,
+    transform 0.38s ease;
+}
+.flow-reveal-enter-from {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+@media (max-width: 640px) {
+  .flow-shell {
+    padding-top: 8px;
+  }
+  .flow-intro {
+    margin-bottom: 26px;
+  }
+  .flow-step {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 11px;
+  }
+  .flow-step::before {
+    left: 16px;
+    top: 34px;
+  }
+  .flow-marker {
+    width: 34px;
+    height: 34px;
+  }
+  .flow-photo-row {
+    grid-template-columns: 1fr;
+  }
+  .flow-photo {
+    height: 210px;
+  }
+  .flow-result-hero,
+  .flow-calorie-line,
+  .flow-save-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .flow-result-actions .btn {
+    flex: 1;
+  }
+  .flow-nutrients {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .flow-save-row .btn {
+    width: 100%;
+  }
+  .flow-history {
+    margin-left: 45px;
+  }
+  .flow-history-row {
+    grid-template-columns: 1fr auto;
+  }
+  .flow-history-row span:nth-child(2),
+  .flow-history-row span:nth-child(4) {
+    display: none;
+  }
+}
+</style>

@@ -54,7 +54,7 @@ const hasRecords = computed(() => dietStore.records.length > 0)
 /** 报告日期文案（含星期） */
 const dateText = computed(() => `${formatCN(todayStr())} ${weekdayCN(todayStr())}`)
 /** 「AI 生成的第 N 份报告」——统计有记录的累计天数（含今天） */
-const reportNo = computed(() => dietStore.historyDays.filter((d) => d.recordCount > 0).length || 1)
+const reportNo = computed(() => dietStore.historyDays.filter(d => d.recordCount > 0).length || 1)
 
 /** 参与评分的营养素 key（权重模型的 7 项，不含饮水） */
 const scoreKeys = computed(() => Object.keys(SCORE_WEIGHTS))
@@ -75,8 +75,8 @@ const gradeBadgeStyle = computed(() => ({
  */
 const detailRows = computed(() => {
   const items = report.value.items
-  return report.value.detail.map((d) => {
-    const item = items.find((i) => i.key === d.key)
+  return report.value.detail.map(d => {
+    const item = items.find(i => i.key === d.key)
     const ratio = d.weight > 0 ? d.got / d.weight : 0
     const status = item ? item.status : ratio >= 0.8 ? 'ok' : ratio >= 0.5 ? 'low' : 'over'
     return { ...d, percent: Math.round(ratio * 100), status }
@@ -126,15 +126,15 @@ const RADAR_KEYS = ['protein', 'carb', 'fat', 'fiber', 'sugar']
 const radarOption = computed(() => {
   const s = dietStore.summary
   const t = dietStore.targets
-  const indicators = RADAR_KEYS.map((k) => ({
+  const indicators = RADAR_KEYS.map(k => ({
     name: NUTRIENT_META[k].label,
     max: Math.round(Math.max(Number(t[k]) || 1, Number(s[k]) || 0) * 1.3)
   }))
   return macaronRadarOption({
     indicators,
     series: [
-      { name: '今日摄入', value: RADAR_KEYS.map((k) => round1(s[k])), color: MACARON.green },
-      { name: '目标值', value: RADAR_KEYS.map((k) => Number(t[k]) || 0), color: MACARON.blue }
+      { name: '今日摄入', value: RADAR_KEYS.map(k => round1(s[k])), color: MACARON.green },
+      { name: '目标值', value: RADAR_KEYS.map(k => Number(t[k]) || 0), color: MACARON.blue }
     ]
   })
 })
@@ -142,8 +142,8 @@ const radarOption = computed(() => {
 /** 近 7 天健康评分折线（含 80 分优秀参考线） */
 const scoreLineOption = computed(() =>
   macaronLineOption({
-    labels: dietStore.weekData.map((d) => d.label),
-    series: [{ name: '健康评分', data: dietStore.weekData.map((d) => d.score), color: MACARON.green, area: true }],
+    labels: dietStore.weekData.map(d => d.label),
+    series: [{ name: '健康评分', data: dietStore.weekData.map(d => d.score), color: MACARON.green, area: true }],
     target: 80,
     targetLabel: '优秀线',
     unit: '分'
@@ -157,7 +157,9 @@ const scoreLineOption = computed(() =>
     <PageHeader>
       <template #extra>
         <span class="chip chip-strong">🗓️ {{ dateText }}</span>
-        <button class="btn btn-ghost" @click="onPrint">🖨️ 打印 / 导出报告</button>
+        <button class="btn btn-ghost" title="打开浏览器打印窗口，选择「另存为 PDF」" @click="onPrint">
+          🖨️ 导出 PDF / 打印
+        </button>
       </template>
     </PageHeader>
 
@@ -226,7 +228,12 @@ const scoreLineOption = computed(() =>
 
     <!-- 空数据引导：无任何记录时，引导用户先去记录饮食 -->
     <MacaronCard v-if="!hasRecords" theme="white" class="mb-5">
-      <EmptyState emoji="🍽️" text="今日还没有任何饮食记录" sub="记录一餐后即可生成完整的 AI 营养分析报告" height="150px">
+      <EmptyState
+        emoji="🍽️"
+        text="今日还没有任何饮食记录"
+        sub="记录一餐后即可生成完整的 AI 营养分析报告"
+        height="150px"
+      >
         <RouterLink to="/diet" class="btn btn-primary mt-2">🍽️ 去记录饮食</RouterLink>
       </EmptyState>
     </MacaronCard>
@@ -294,7 +301,8 @@ const scoreLineOption = computed(() =>
           <div v-for="i in overItems" :key="i.key" class="soft-panel">
             <div class="flex items-center justify-between gap-2">
               <p class="flex items-center gap-2 text-[13px] font-bold tx-main">
-                <span class="emoji-badge mc-orange">{{ i.emoji }}</span>{{ i.label }}
+                <span class="emoji-badge mc-orange">{{ i.emoji }}</span
+                >{{ i.label }}
               </p>
               <StatusBadge :status="i.status" />
             </div>
@@ -316,7 +324,8 @@ const scoreLineOption = computed(() =>
           <div v-for="i in lowItems" :key="i.key" class="soft-panel">
             <div class="flex items-center justify-between gap-2">
               <p class="flex items-center gap-2 text-[13px] font-bold tx-main">
-                <span class="emoji-badge mc-blue">{{ i.emoji }}</span>{{ i.label }}
+                <span class="emoji-badge mc-blue">{{ i.emoji }}</span
+                >{{ i.label }}
               </p>
               <StatusBadge :status="i.status" />
             </div>
@@ -337,7 +346,10 @@ const scoreLineOption = computed(() =>
     <MacaronCard theme="purple" class="mb-5" title="AI 改进建议" emoji="💡" sub="按优先级从高到低给出可执行动作">
       <div class="soft-panel space-y-1">
         <div v-for="(s, i) in report.suggestions" :key="i" class="list-item">
-          <span class="grid h-6 w-6 shrink-0 place-items-center rounded-pill text-[12px] font-bold" :style="idxStyle(i)">
+          <span
+            class="grid h-6 w-6 shrink-0 place-items-center rounded-pill text-[12px] font-bold"
+            :style="idxStyle(i)"
+          >
             {{ i + 1 }}
           </span>
           <p class="flex-1 text-[13px] leading-relaxed tx-main">{{ s }}</p>
@@ -358,7 +370,13 @@ const scoreLineOption = computed(() =>
     </div>
 
     <!-- ================= 8. 历史报告对比（近 7 天评分） ================= -->
-    <MacaronCard theme="cyan" static-scale title="历史报告对比" emoji="📈" sub="近 7 天健康评分走势（含 80 分优秀参考线）">
+    <MacaronCard
+      theme="cyan"
+      static-scale
+      title="历史报告对比"
+      emoji="📈"
+      sub="近 7 天健康评分走势（含 80 分优秀参考线）"
+    >
       <BaseChart :option="scoreLineOption" height="240px" />
 
       <!-- 每天一张小卡：评分 + 等级，今日高亮 -->
@@ -367,13 +385,73 @@ const scoreLineOption = computed(() =>
           v-for="d in dietStore.weekData"
           :key="d.date"
           class="tile mc-white text-center"
-          :style="isToday(d.date) ? { boxShadow: 'inset 0 0 0 2px #ffc59b' } : {}"
+          :style="isToday(d.date) ? { boxShadow: 'inset 0 0 0 1px #0f8f84' } : {}"
         >
           <p class="text-[11px] tx-muted">{{ d.label }}</p>
           <p class="tile-value text-[20px]" :style="{ color: d.grade.color }">{{ d.score }}</p>
-          <p class="mt-1 text-[11px] font-bold" :style="{ color: d.grade.color }">{{ d.grade.emoji }} {{ d.grade.label }}</p>
+          <p class="mt-1 text-[11px] font-bold" :style="{ color: d.grade.color }">
+            {{ d.grade.emoji }} {{ d.grade.label }}
+          </p>
         </div>
       </div>
     </MacaronCard>
   </div>
 </template>
+
+<style>
+/**
+ * 报告页打印 / 导出 PDF 样式（必须非 scoped：侧栏与顶栏在 App.vue 中）
+ * ------------------------------------------------------------------
+ * 目标：A4 纵向、去掉导航与交互按钮，只保留报告正文，
+ *      让用户直接「打印 → 另存为 PDF」即可得到一份干净的营养分析报告。
+ */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+  }
+
+  /* 隐藏全局导航、顶栏与路由加载条 */
+  .sidebar,
+  .topbar,
+  .route-progress {
+    display: none !important;
+  }
+
+  /* 隐藏所有交互按钮，避免 PDF 中出现无效操作 */
+  .btn {
+    display: none !important;
+  }
+
+  /* 主区域去掉内边距与最大宽度，占满 A4 版心 */
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  /* 卡片去阴影、禁止跨页断裂，保留细描边以区分区块 */
+  .macaron-card {
+    box-shadow: none !important;
+    border: 1px solid #e7eaef !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    overflow: visible !important;
+  }
+
+  /* 关闭入场动画与悬停位移，避免打印时出现半透明或错位 */
+  .stagger > * {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .card-hover,
+  .card-hover-static {
+    transform: none !important;
+  }
+}
+</style>

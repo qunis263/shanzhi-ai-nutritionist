@@ -2,395 +2,618 @@
 /**
  * HomeView 首页主页
  * ------------------------------------------------------------------
- * 项目《膳知・AI 营养分析师》的门户页面，目标：让评委一进入就看到
- * 「数据实时联动 + AI 分析 + 可视化图表」的整体效果。
- *
- * 页面结构（自上而下）：
- *   ① 页面标题栏（PageHeader）+ 两个快捷入口按钮
- *   ② Hero 概览大卡片：欢迎语 / 今日日期 / 饮食模式 + 健康评分仪表盘 + AI 评语
- *   ③ 今日营养合计：8 个 StatTile（热量 / 蛋白 / 脂肪 / 碳水 / 纤维 / 糖 / 钠 / 饮水）
- *   ④ 两栏图表区：三大营养素占比环形饼图 + 一周热量趋势折线图
- *   ⑤ 今日三餐概览：早餐 / 午餐 / 晚餐 / 零食 四张小卡
- *   ⑥ 营养达标进度条（mc-cyan）
- *   ⑦ AI 营养评语（mc-purple）
- *   ⑧ AI 膳食推荐预览（mc-green）
- *   ⑨ 底部「功能导航」九宫格
- *
- * 说明：所有数据均来自 Pinia Store 的派生 computed，页面本身不保存状态。
+ * 首页只回答两个问题：今天状态如何，以及下一步最该做什么。
+ * 完整营养数据、趋势图和长篇 AI 分析由对应功能页承载，避免首页重复堆叠。
  */
 import { computed } from 'vue'
 import { useDietStore } from '@/store/diet'
 import { useUserStore } from '@/store/user'
-import { NAV_ITEMS } from '@/router'
 import PageHeader from '@/components/common/PageHeader.vue'
-import MacaronCard from '@/components/common/MacaronCard.vue'
-import StatTile from '@/components/common/StatTile.vue'
-import StatusBadge from '@/components/common/StatusBadge.vue'
 import ProgressBar from '@/components/common/ProgressBar.vue'
-import EmptyState from '@/components/common/EmptyState.vue'
-import BaseChart from '@/components/charts/BaseChart.vue'
-import { macaronGaugeOption, macaronPieOption, macaronLineOption, MACARON } from '@/utils/charts'
-import { themeBg, themeByIndex } from '@/utils/theme'
-import { NUTRIENT_META, round1 } from '@/utils/nutrition'
+import { buildDailyBrief } from '@/utils/nutrition'
 import { formatCN, weekdayCN, todayStr } from '@/utils/date'
 
 const dietStore = useDietStore()
 const userStore = useUserStore()
 
-/* ============================ 基础数据 ============================ */
-const profile = computed(() => userStore.profile) // 用户档案
-const metrics = computed(() => userStore.metrics) // 身体指标 / 饮食模式 / 目标
-const summary = computed(() => dietStore.summary) // 今日营养合计
-const targets = computed(() => dietStore.targets) // 今日营养目标
-const report = computed(() => dietStore.report) // 今日 AI 报告
-const mealPlan = computed(() => dietStore.mealPlan) // AI 膳食推荐方案
-/** 今日是否有饮食记录（用于空状态判断） */
+const profile = computed(() => userStore.profile)
+const metrics = computed(() => userStore.metrics)
+const summary = computed(() => dietStore.summary)
+const targets = computed(() => dietStore.targets)
+const report = computed(() => dietStore.report)
+const mealPlan = computed(() => dietStore.mealPlan)
+const dateText = computed(() => `${formatCN(todayStr())} ${weekdayCN(todayStr())}`)
 const hasRecords = computed(() => dietStore.records.length > 0)
 
-/** 今日日期展示：10月15日 周三 */
-const dateText = computed(() => `${formatCN(todayStr())} ${weekdayCN(todayStr())}`)
+function itemOf(key) {
+  return report.value.items.find(item => item.key === key) || { percent: 0, status: 'ok' }
+}
 
-/* ============================ 图表配置 ============================ */
+const calorieItem = computed(() => itemOf('calories'))
+const waterItem = computed(() => itemOf('water'))
+const calorieValue = computed(() => Math.round(summary.value.calories))
+const waterValue = computed(() => dietStore.water)
+const brief = computed(() => buildDailyBrief({ report: report.value, records: dietStore.records }))
 
-/** 健康评分仪表盘（颜色随评分等级变化） */
-const gaugeOption = computed(() =>
-  macaronGaugeOption({ value: report.value.score, color: report.value.grade.color })
-)
+const scoreStyle = computed(() => ({
+  background: `conic-gradient(var(--brand) 0 ${Math.max(0, Math.min(100, report.value.score))}%, #e9eeed ${Math.max(0, Math.min(100, report.value.score))}% 100%)`
+}))
 
-/** 三大营养素摄入占比环形饼图 */
-const pieOption = computed(() =>
-  macaronPieOption({
-    data: [
-      { name: '碳水', value: summary.value.carb, color: MACARON.orange },
-      { name: '蛋白质', value: summary.value.protein, color: MACARON.green },
-      { name: '脂肪', value: summary.value.fat, color: MACARON.yellow }
-    ],
-    centerTitle: '今日总热量',
-    centerValue: Math.round(summary.value.calories),
-    centerUnit: 'kcal'
-  })
-)
-
-/** 一周热量趋势折线图（含目标参考线） */
-const lineOption = computed(() =>
-  macaronLineOption({
-    labels: dietStore.weekData.map((d) => d.label),
-    series: [{ name: '热量', data: dietStore.weekData.map((d) => d.calories), color: MACARON.orange, area: true }],
-    target: targets.value.calories,
-    targetLabel: '目标',
-    unit: 'kcal'
-  })
-)
-
-/* ============================ 营养合计小卡 ============================ */
-
-/** 8 项营养素的展示顺序（与 NUTRIENT_META 一致） */
-const TILE_KEYS = ['calories', 'protein', 'fat', 'carb', 'fiber', 'sugar', 'sodium', 'water']
-
-/**
- * 组装 8 个 StatTile 的数据：
- * 数值取当日实际摄入，状态取报告中的逐项判定（含饮水）
- */
-const tileList = computed(() => {
-  const s = summary.value
-  const t = targets.value
-  const items = report.value.items
-  return TILE_KEYS.map((key, i) => {
-    const meta = NUTRIENT_META[key]
-    const raw = key === 'water' ? dietStore.water : s[key]
-    const item = items.find((it) => it.key === key)
+const mealRows = computed(() =>
+  dietStore.MEAL_TYPES.map((type, index) => {
+    const records = dietStore.mealGroups[type]
     return {
-      key,
-      theme: themeByIndex(i), // 六色循环配色
-      emoji: meta.emoji,
-      label: meta.label,
-      unit: meta.unit,
-      value: key === 'calories' ? Math.round(raw) : round1(raw),
-      target: t[key],
-      status: item || 'ok'
+      type,
+      emoji: dietStore.MEAL_EMOJI[type],
+      records,
+      calories: dietStore.mealCalories[index],
+      summary: records.length
+        ? records
+            .slice(0, 3)
+            .map(record => record.name)
+            .join('、')
+        : '尚未记录'
     }
   })
-})
-
-/* ============================ 三餐概览 ============================ */
-
-/** 四个餐段小卡（含餐段合计热量） */
-const mealCards = computed(() =>
-  dietStore.MEAL_TYPES.map((type, i) => ({
-    type,
-    emoji: dietStore.MEAL_EMOJI[type],
-    theme: dietStore.MEAL_THEME[type],
-    records: dietStore.mealGroups[type],
-    calories: dietStore.mealCalories[i]
-  }))
 )
 
-/* ============================ 膳食推荐预览 ============================ */
+const nextMeal = computed(() => {
+  const unrecorded = mealRows.value.find(meal => meal.type !== '零食' && !meal.records.length)
+  return unrecorded || null
+})
 
-/** 早 / 午 / 晚三餐推荐（取自 mealPlan） */
-const planMeals = computed(() => [
-  { key: 'breakfast', label: '早餐', emoji: '🌅', data: mealPlan.value.breakfast },
-  { key: 'lunch', label: '午餐', emoji: '☀️', data: mealPlan.value.lunch },
-  { key: 'dinner', label: '晚餐', emoji: '🌙', data: mealPlan.value.dinner }
-])
+const focusTitle = computed(() => {
+  if (!hasRecords.value) return `${profile.value.nickname}，先记录今天的第一餐`
+  if (nextMeal.value) return `${profile.value.nickname}，先把${nextMeal.value.type}安排好`
+  return `${profile.value.nickname}，今天还有一件事值得调整`
+})
 
-/* ============================ 导航 ============================ */
+const focusAction = computed(() => {
+  if (!hasRecords.value) return '记录后，热量、饮水和健康建议会自动更新。'
+  return brief.value.tip
+})
 
-/** 功能导航九宫格数据（由路由表推导，保证与侧边栏一致） */
-const navItems = computed(() => NAV_ITEMS)
+const nextTitle = computed(() => (nextMeal.value ? `补记${nextMeal.value.type}` : '查看今日完整分析'))
+const nextDescription = computed(() => {
+  if (!hasRecords.value) return '从早餐、午餐或刚刚吃过的食物开始。'
+  if (nextMeal.value?.type === '晚餐') {
+    return mealPlan.value?.dinner?.name ? `推荐：${mealPlan.value.dinner.name}` : '建议选择优质蛋白、蔬菜和适量主食。'
+  }
+  if (nextMeal.value) return `补全${nextMeal.value.type}后，今日评分会更准确。`
+  return '查看营养缺口、趋势变化和更完整的 AI 建议。'
+})
+
+/** 首页主线四步：识别 → 记录 → 报告 → 干预，构成完整使用闭环 */
+const flowSteps = [
+  { to: '/recognize', emoji: '📷', title: '拍照识别', desc: '上传食物照片，AI 判断食材并估算分量' },
+  { to: '/diet', emoji: '🍽️', title: '记录饮食', desc: '确认分量后加入今日记录，热量自动核算' },
+  { to: '/report', emoji: '📊', title: '查看报告', desc: '获得健康总分、营养缺口与 AI 改进建议' },
+  { to: '/intervention', emoji: '🌱', title: '7 天干预', desc: '按计划逐日调整，跟踪连续改善效果' }
+]
 </script>
 
 <template>
-  <div class="stagger">
-    <!-- ① 页面标题栏 + 两个快捷入口 -->
+  <div class="home-focus stagger">
     <PageHeader>
       <template #extra>
-        <RouterLink to="/recognize" class="btn btn-purple">📷 去识别食物</RouterLink>
+        <RouterLink to="/recognize" class="btn btn-ghost">📷 识别食物</RouterLink>
         <RouterLink to="/diet" class="btn btn-primary">🍽️ 记录饮食</RouterLink>
       </template>
     </PageHeader>
 
-    <!-- ② Hero 概览大卡片（左：欢迎语与快捷入口 / 右：评分仪表盘与 AI 评语） -->
-    <section class="macaron-card mc-orange card-hover-static mb-5">
-      <div class="grid items-center gap-6 lg:grid-cols-[1.5fr_1fr]">
-        <!-- 左栏：欢迎语 + 日期 + 饮食模式 + 快捷入口 -->
-        <div class="flex flex-col justify-center">
-          <p class="text-[12px] font-bold" style="color: #b46b3a">🌤️ 今日营养总览</p>
-          <h2 class="mt-1.5 text-[24px] font-extrabold tx-main">{{ profile.nickname }}，你好 👋</h2>
-          <p class="mt-1 text-[13px] tx-sub">今天是 {{ dateText }}，一起看看今天的饮食表现吧～</p>
-
-          <!-- 今日饮食模式 + 热量进度胶囊 -->
-          <div class="mt-3.5 flex flex-wrap items-center gap-2">
-            <span class="chip chip-strong">
-              <span aria-hidden="true">🎯</span>
-              {{ metrics.dietMode }}
-              <span class="tx-muted">· 目标 {{ targets.calories }} kcal</span>
-            </span>
-            <span class="chip">
-              <span aria-hidden="true">🔥</span>
-              已摄入
-              <b class="num chip-strong">{{ Math.round(summary.calories) }}</b>
-              kcal
-            </span>
-          </div>
-
-          <!-- 5 个快捷入口按钮 -->
-          <div class="mt-4 flex flex-wrap gap-2.5">
-            <RouterLink to="/diet" class="btn btn-primary">🍽️ 记录饮食</RouterLink>
-            <RouterLink to="/recognize" class="btn btn-purple">📷 AI食物识别</RouterLink>
-            <RouterLink to="/chat" class="btn btn-green">💬 问营养助手</RouterLink>
-            <RouterLink to="/foods" class="btn btn-ghost">🍱 食物营养速查</RouterLink>
-            <RouterLink to="/report" class="btn btn-ghost">📋 查看报告</RouterLink>
-          </div>
+    <main class="focus-shell">
+      <section class="focus-heading">
+        <div>
+          <p class="focus-eyebrow">今日重点 · {{ dateText }}</p>
+          <h2>{{ focusTitle }}</h2>
+          <p>{{ focusAction }}</p>
         </div>
-
-        <!-- 右栏：健康评分仪表盘 + 等级标签 + AI 评语 -->
-        <div class="rounded-[18px] p-4" style="background: rgba(255, 255, 255, 0.72)">
-          <BaseChart :option="gaugeOption" height="168px" />
-          <div class="mt-2 flex flex-wrap items-center justify-center gap-2">
-            <!-- 评分等级标签（底色与文字色随等级变化） -->
-            <span class="badge" :style="{ backgroundColor: themeBg(report.grade.theme), color: report.grade.color }">
-              {{ report.grade.emoji }} 健康等级 · {{ report.grade.label }}
-            </span>
-            <span class="chip">📝 已记录 {{ dietStore.records.length }} 条</span>
-          </div>
-          <!-- 一句话 AI 评语（限 3 行，点击可查看完整报告） -->
-          <div class="mt-3 rounded-[14px] bg-white p-3">
-            <p class="ellipsis-3 text-[12px] leading-relaxed tx-sub">{{ report.aiComment }}</p>
-          </div>
+        <div class="focus-heading-actions">
+          <RouterLink to="/diet" class="btn btn-primary">记录饮食</RouterLink>
+          <RouterLink to="/chat" class="btn btn-ghost">问营养助手</RouterLink>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ③ 今日营养合计：8 个 StatTile -->
-    <section class="mb-5">
-      <div class="mb-3 flex items-center justify-between">
-        <h2 class="flex items-center gap-2 text-[17px] font-extrabold tx-main">
-          <span class="emoji-badge mc-green" aria-hidden="true">🧮</span> 今日营养合计
-        </h2>
-        <span class="text-[12px] tx-muted">目标值随身体档案自动更新 ✨</span>
-      </div>
-
-      <div v-if="hasRecords" class="grid grid-cols-4 gap-5">
-        <!-- 每张 StatTile 顶部为 Emoji + 名称，主数值为实际摄入，底部副文案为「目标值 + 状态标签」 -->
-        <StatTile
-          v-for="tile in tileList"
-          :key="tile.key"
-          :theme="tile.theme"
-          :label="tile.label"
-          :emoji="tile.emoji"
-          :value="tile.value"
-          :unit="tile.unit"
-        >
-          <span>目标 {{ tile.target }}{{ tile.unit }} · </span>
-          <StatusBadge :status="tile.status" size="sm" />
-        </StatTile>
-      </div>
-
-      <!-- 空状态：引导先去记录饮食 -->
-      <div v-else class="macaron-card">
-        <EmptyState emoji="🍽️" text="今天还没有任何饮食记录" sub="记录第一餐后，这里会自动汇总 8 项营养数据">
-          <RouterLink to="/diet" class="btn btn-primary btn-xs mt-2">🍽️ 去记录饮食</RouterLink>
-        </EmptyState>
-      </div>
-    </section>
-
-    <!-- ④ 两栏图表区：三大营养素占比饼图 + 一周热量趋势折线图 -->
-    <section class="mb-5 grid grid-cols-2 gap-5">
-      <MacaronCard
-        theme="orange"
-        title="三大营养素摄入占比"
-        emoji="🥗"
-        sub="碳水 / 蛋白质 / 脂肪供能结构"
-        static-scale
-      >
-        <BaseChart :option="pieOption" height="280px" />
-      </MacaronCard>
-
-      <MacaronCard theme="blue" title="一周热量趋势" emoji="📈" sub="最近 7 天热量摄入与目标对比" static-scale>
-        <BaseChart :option="lineOption" height="280px" />
-      </MacaronCard>
-    </section>
-
-    <!-- ⑤ 今日三餐概览 -->
-    <section class="mb-5">
-      <div class="mb-3 flex items-center justify-between">
-        <h2 class="flex items-center gap-2 text-[17px] font-extrabold tx-main">
-          <span class="emoji-badge mc-orange" aria-hidden="true">🍱</span> 今日三餐概览
-        </h2>
-        <RouterLink to="/diet" class="btn btn-ghost btn-xs">去记录 +</RouterLink>
-      </div>
-
-      <div v-if="hasRecords" class="grid grid-cols-4 gap-5">
-        <MacaronCard
-          v-for="meal in mealCards"
-          :key="meal.type"
-          :theme="meal.theme"
-          :title="meal.type"
-          :emoji="meal.emoji"
-          :sub="`${meal.records.length} 种食物`"
-          flex
-        >
-          <!-- 有记录：逐条展示「Emoji + 名称 + 热量小标签」 -->
-          <div v-if="meal.records.length" class="space-y-2.5">
-            <div v-for="r in meal.records" :key="r.id" class="flex items-center gap-2">
-              <span aria-hidden="true">{{ r.emoji }}</span>
-              <span class="ellipsis flex-1 text-[12px] tx-main">{{ r.name }}</span>
-              <span class="tag tag-orange num">{{ Math.round(r.nutrition.calories) }} kcal</span>
-            </div>
-          </div>
-          <!-- 空餐段：小尺寸空状态提示 -->
-          <EmptyState v-else emoji="🥢" text="该餐段暂无记录" height="96px" />
-
-          <!-- 卡片底部：餐段合计热量 -->
-          <template #footer>
-            <div class="flex items-center justify-between pt-3" style="border-top: 1px solid #eff3f8">
-              <span class="text-[12px] tx-muted">餐段合计</span>
-              <span class="num text-[15px] font-extrabold tx-main">
-                {{ meal.calories }}<span class="ml-1 text-[11px] tx-muted">kcal</span>
-              </span>
-            </div>
-          </template>
-        </MacaronCard>
-      </div>
-
-      <div v-else class="macaron-card">
-        <EmptyState emoji="🍽️" text="三餐空空如也" sub="快去记录今天吃了什么吧">
-          <RouterLink to="/diet" class="btn btn-primary btn-xs mt-2">🍽️ 去记录饮食</RouterLink>
-        </EmptyState>
-      </div>
-    </section>
-
-    <!-- ⑥ 营养达标进度条（mc-cyan） -->
-    <MacaronCard theme="cyan" title="营养达标进度" emoji="📈" sub="实际摄入 / 目标值（含饮水）" class="mb-5">
-      <div v-if="hasRecords" class="space-y-4">
-        <div v-for="p in dietStore.progressList" :key="p.key" class="flex items-center gap-3">
-          <span class="w-6 shrink-0 text-center text-[16px]" aria-hidden="true">{{ p.emoji }}</span>
-          <span class="w-[76px] shrink-0 text-[12px] font-semibold tx-main">{{ p.label }}</span>
-          <span class="num w-[132px] shrink-0 text-[12px] tx-sub">
-            {{ p.value }} / {{ p.target }} {{ p.unit }}
+      <section class="focus-overview">
+        <div class="focus-message">
+          <span class="focus-status" :style="{ color: report.grade.color }">
+            {{ report.grade.emoji }} {{ report.grade.label }}
           </span>
-          <ProgressBar class="flex-1" :percent="p.percent" :status="p.status" />
-          <StatusBadge :status="p" size="sm" />
-        </div>
-      </div>
-
-      <EmptyState v-else emoji="📊" text="暂无营养数据" sub="记录一餐后即可看到各项达标进度">
-        <RouterLink to="/diet" class="btn btn-primary btn-xs mt-2">🍽️ 去记录饮食</RouterLink>
-      </EmptyState>
-    </MacaronCard>
-
-    <!-- ⑦ AI 营养评语（mc-purple） -->
-    <MacaronCard
-      theme="purple"
-      title="AI 营养评语"
-      emoji="🤖"
-      sub="基于当日营养结构生成的智能点评"
-      class="mb-5"
-    >
-      <template #extra>
-        <RouterLink to="/report" class="btn btn-purple btn-xs">查看完整报告</RouterLink>
-      </template>
-      <p class="text-[13px] leading-[1.9] tx-main">{{ report.aiComment }}</p>
-    </MacaronCard>
-
-    <!-- ⑧ AI 膳食推荐预览（mc-green） -->
-    <MacaronCard
-      theme="green"
-      title="AI 膳食推荐预览"
-      emoji="🧑‍🍳"
-      sub="按当前营养缺口智能定制三餐方案"
-      class="mb-5"
-    >
-      <template #extra>
-        <RouterLink to="/plan" class="btn btn-green btn-xs">查看完整方案</RouterLink>
-      </template>
-      <div class="grid grid-cols-3 gap-5">
-        <div v-for="meal in planMeals" :key="meal.key" class="soft-panel">
-          <div class="flex items-center gap-2.5">
-            <span class="emoji-badge-lg" :class="`mc-${meal.data.theme}`" aria-hidden="true">
-              {{ meal.data.emoji }}
-            </span>
-            <div class="min-w-0 flex-1">
-              <p class="flex items-center gap-1.5 text-[13px] font-bold tx-main">
-                <span aria-hidden="true">{{ meal.emoji }}</span>{{ meal.label }}
-              </p>
-              <p class="mt-0.5 ellipsis text-[12px] tx-sub">{{ meal.data.name }}</p>
-            </div>
-            <span class="tag tag-green num shrink-0">🔥 {{ meal.data.nutrition.calories }} kcal</span>
+          <h3>{{ brief.praise }}</h3>
+          <p>{{ brief.tip }}</p>
+          <div class="focus-profile-line">
+            <span>目标：{{ metrics.dietMode }}</span>
+            <span>已记录 {{ dietStore.records.length }} 条</span>
           </div>
-          <!-- 推荐理由（AI 决策解释） -->
-          <p class="mt-3 ellipsis-2 text-[12px] leading-relaxed tx-muted">{{ meal.data.reason }}</p>
         </div>
-      </div>
-    </MacaronCard>
 
-    <!-- ⑨ 功能导航九宫格 -->
-    <section>
-      <div class="mb-3 flex items-center gap-2">
-        <span class="emoji-badge mc-blue" aria-hidden="true">🧭</span>
-        <h2 class="text-[17px] font-extrabold tx-main">功能导航</h2>
-      </div>
-      <div class="grid grid-cols-3 gap-5">
-        <RouterLink
-          v-for="item in navItems"
-          :key="item.path"
-          :to="item.path"
-          class="macaron-card card-hover block"
-          :class="`mc-${item.theme}`"
-        >
-          <div class="flex items-start gap-3">
-            <span class="emoji-badge-lg" aria-hidden="true">{{ item.emoji }}</span>
-            <div class="min-w-0 flex-1">
-              <p class="flex items-center gap-2 text-[14px] font-bold tx-main">
-                <span class="truncate">{{ item.title }}</span>
-                <span v-if="item.badge" class="tag tag-purple text-[10px]">{{ item.badge }}</span>
-              </p>
-              <p class="mt-1 ellipsis-2 text-[12px] tx-sub">{{ item.desc }}</p>
-            </div>
+        <div class="focus-score" :style="scoreStyle" :aria-label="`今日健康评分 ${report.score} 分`">
+          <div>
+            <strong class="num">{{ report.score }}</strong>
+            <span>今日健康分</span>
           </div>
-        </RouterLink>
-      </div>
-    </section>
+        </div>
+      </section>
+
+      <section class="focus-progress" aria-label="今日核心进度">
+        <div class="focus-progress-item">
+          <div class="focus-progress-head">
+            <span>🔥 今日热量</span>
+            <strong class="num"
+              >{{ calorieValue }} <small>/ {{ targets.calories }} kcal</small></strong
+            >
+          </div>
+          <ProgressBar :percent="calorieItem.percent" :status="calorieItem.status" :show-label="false" />
+        </div>
+        <div class="focus-progress-item">
+          <div class="focus-progress-head">
+            <span>💧 今日饮水</span>
+            <strong class="num"
+              >{{ waterValue }} <small>/ {{ targets.water }} ml</small></strong
+            >
+          </div>
+          <ProgressBar :percent="waterItem.percent" :status="waterItem.status" :show-label="false" />
+        </div>
+      </section>
+
+      <section class="focus-flow" aria-label="核心使用流程">
+        <div class="focus-section-head">
+          <div>
+            <h3>四步完成今天</h3>
+            <p>识别 → 记录 → 报告 → 干预，形成可持续的调整闭环</p>
+          </div>
+          <RouterLink to="/report">查看报告 →</RouterLink>
+        </div>
+        <div class="flow-grid">
+          <RouterLink v-for="(step, i) in flowSteps" :key="step.to" :to="step.to" class="flow-step">
+            <span class="flow-step-index num" aria-hidden="true">0{{ i + 1 }}</span>
+            <span class="flow-step-emoji" aria-hidden="true">{{ step.emoji }}</span>
+            <span class="flow-step-title">{{ step.title }}</span>
+            <span class="flow-step-desc">{{ step.desc }}</span>
+            <span class="flow-step-link">进入 →</span>
+          </RouterLink>
+        </div>
+      </section>
+
+      <section class="focus-lower">
+        <div class="focus-meals">
+          <div class="focus-section-head">
+            <div>
+              <h3>今日饮食</h3>
+              <p>只保留餐次摘要，食物明细在饮食记录页查看</p>
+            </div>
+            <RouterLink to="/diet">全部记录 →</RouterLink>
+          </div>
+
+          <div v-if="hasRecords" class="meal-list">
+            <RouterLink v-for="meal in mealRows" :key="meal.type" to="/diet" class="meal-row">
+              <span class="meal-name"
+                ><b aria-hidden="true">{{ meal.emoji }}</b
+                >{{ meal.type }}</span
+              >
+              <span class="meal-summary">{{ meal.summary }}</span>
+              <span v-if="meal.records.length" class="meal-calories num">{{ meal.calories }} kcal</span>
+              <span v-else class="meal-empty">去记录</span>
+            </RouterLink>
+          </div>
+
+          <div v-else class="focus-empty">
+            <span aria-hidden="true">🥢</span>
+            <div>
+              <strong>今天还没有饮食记录</strong>
+              <p>添加第一餐后，这里会形成清晰的餐次摘要。</p>
+            </div>
+            <RouterLink to="/diet" class="btn btn-primary btn-xs">记录第一餐</RouterLink>
+          </div>
+        </div>
+
+        <aside class="focus-next">
+          <p class="focus-eyebrow">下一步</p>
+          <h3>{{ nextTitle }}</h3>
+          <p>{{ nextDescription }}</p>
+          <RouterLink v-if="nextMeal || !hasRecords" to="/diet" class="btn btn-primary">
+            {{ nextMeal ? `添加${nextMeal.type}` : '开始记录' }}
+          </RouterLink>
+          <RouterLink v-else to="/report" class="btn btn-primary">查看完整报告</RouterLink>
+          <RouterLink to="/plan" class="focus-secondary-link">查看膳食方案 →</RouterLink>
+        </aside>
+      </section>
+
+      <nav class="focus-footer-links" aria-label="首页次要功能">
+        <RouterLink to="/report">营养分析报告</RouterLink>
+        <RouterLink to="/foods">食物营养速查</RouterLink>
+        <RouterLink to="/body">身体数据测评</RouterLink>
+        <RouterLink to="/dashboard">数据趋势大屏</RouterLink>
+      </nav>
+    </main>
   </div>
 </template>
+
+<style scoped>
+.focus-shell {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  padding: 8px 0 48px;
+}
+.focus-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 0 28px;
+}
+.focus-eyebrow {
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 800;
+}
+.focus-heading h2 {
+  margin-top: 7px;
+  color: var(--ink);
+  font-size: clamp(25px, 3vw, 34px);
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.focus-heading > div > p:last-child {
+  margin-top: 8px;
+  color: var(--tx-sub);
+  font-size: 13px;
+}
+.focus-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding-top: 18px;
+}
+.focus-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px;
+  align-items: center;
+  gap: 40px;
+  padding: 28px 0;
+  border-block: 1px solid var(--line);
+}
+.focus-message {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+.focus-status {
+  font-size: 12px;
+  font-weight: 800;
+}
+.focus-message h3 {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 800;
+}
+.focus-message > p {
+  max-width: 620px;
+  color: var(--tx-sub);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.focus-profile-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 5px;
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.focus-score {
+  width: 146px;
+  height: 146px;
+  display: grid;
+  place-items: center;
+  justify-self: end;
+  border-radius: 50%;
+  position: relative;
+}
+.focus-score::after {
+  content: '';
+  position: absolute;
+  inset: 12px;
+  border-radius: 50%;
+  background: #fff;
+}
+.focus-score > div {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+}
+.focus-score strong {
+  color: var(--ink);
+  font-size: 34px;
+  line-height: 1;
+}
+.focus-score span {
+  margin-top: 6px;
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.focus-progress {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 34px;
+  padding: 26px 0;
+  border-bottom: 1px solid var(--line);
+}
+.focus-progress-item {
+  display: grid;
+  gap: 10px;
+}
+.focus-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+}
+.focus-progress-head > span {
+  color: var(--tx-main);
+  font-weight: 700;
+}
+.focus-progress-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+.focus-progress-head small {
+  color: var(--tx-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+.focus-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  gap: 42px;
+  padding: 30px 0;
+}
+.focus-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 12px;
+}
+.focus-section-head h3,
+.focus-next h3 {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 800;
+}
+.focus-section-head p {
+  margin-top: 3px;
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.focus-section-head a,
+.focus-secondary-link {
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 700;
+}
+.meal-list {
+  border-top: 1px solid var(--line);
+}
+.meal-row {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr) 84px;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  border-bottom: 1px solid var(--line);
+  transition: background 0.2s ease;
+}
+.meal-row:hover {
+  background: #fafcfc;
+}
+.meal-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+.meal-summary {
+  overflow: hidden;
+  color: var(--tx-sub);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meal-calories,
+.meal-empty {
+  justify-self: end;
+  font-size: 11px;
+}
+.meal-calories {
+  color: var(--tx-sub);
+}
+.meal-empty {
+  color: var(--brand);
+  font-weight: 700;
+}
+.focus-next {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 10px;
+  padding-left: 24px;
+  border-left: 3px solid var(--brand);
+}
+.focus-next > p:not(.focus-eyebrow) {
+  color: var(--tx-sub);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.focus-next .btn {
+  margin-top: 4px;
+}
+.focus-secondary-link {
+  margin-top: 2px;
+}
+.focus-empty {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 13px;
+  padding: 24px 0;
+  border-block: 1px solid var(--line);
+}
+.focus-empty > span {
+  font-size: 28px;
+}
+.focus-empty strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+.focus-empty p {
+  margin-top: 2px;
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.focus-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.focus-footer-links a {
+  color: var(--tx-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.focus-footer-links a:hover {
+  color: var(--brand);
+}
+/* 主线四步：识别 → 记录 → 报告 → 干预 */
+.focus-flow {
+  padding: 26px 0;
+  border-bottom: 1px solid var(--line);
+}
+.flow-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.flow-step {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  padding: 14px 14px 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  transition:
+    border-color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.flow-step:hover {
+  border-color: var(--brand);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(15, 143, 132, 0.08);
+}
+.flow-step:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.flow-step-index {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  color: var(--tx-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.flow-step-emoji {
+  font-size: 20px;
+  line-height: 1.2;
+}
+.flow-step-title {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 800;
+}
+.flow-step-desc {
+  color: var(--tx-sub);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.flow-step-link {
+  margin-top: 1px;
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 700;
+}
+@media (max-width: 720px) {
+  .home-focus :deep(header.mb-5) {
+    display: block;
+  }
+  .home-focus :deep(header.mb-5 > div:last-child) {
+    display: none;
+  }
+  .home-focus :deep(header.mb-5 > div:first-child) {
+    min-width: 0;
+  }
+  .focus-shell {
+    padding-top: 0;
+  }
+  .focus-heading {
+    align-items: stretch;
+    flex-direction: column;
+    padding-top: 8px;
+  }
+  .focus-heading-actions {
+    padding-top: 0;
+  }
+  .focus-heading-actions .btn {
+    flex: 1;
+  }
+  .focus-overview {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  .focus-score {
+    width: 120px;
+    height: 120px;
+    justify-self: start;
+  }
+  .focus-score strong {
+    font-size: 28px;
+  }
+  .focus-progress,
+  .focus-lower {
+    grid-template-columns: 1fr;
+  }
+  .flow-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .focus-progress {
+    gap: 20px;
+  }
+  .focus-lower {
+    gap: 28px;
+  }
+  .focus-next {
+    padding: 20px 0 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+  .meal-row {
+    grid-template-columns: 68px minmax(0, 1fr) 70px;
+  }
+  .focus-empty {
+    grid-template-columns: auto 1fr;
+  }
+  .focus-empty .btn {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
+</style>
