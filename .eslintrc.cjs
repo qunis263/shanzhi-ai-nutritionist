@@ -22,6 +22,23 @@ module.exports = {
     ecmaVersion: 'latest',
     sourceType: 'module'
   },
+  overrides: [
+    {
+      files: ['*.ts', '*.vue'],
+      parser: 'vue-eslint-parser',
+      parserOptions: {
+        parser: '@typescript-eslint/parser',
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        extraFileExtensions: ['.vue']
+      },
+      plugins: ['@typescript-eslint'],
+      rules: {
+        'no-unused-vars': 'off',
+        '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }]
+      }
+    }
+  ],
   rules: {
     // 未使用变量降为警告，并允许以下划线开头的占位参数
     'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],

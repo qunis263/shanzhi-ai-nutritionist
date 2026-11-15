@@ -9,7 +9,7 @@
  *      · 拼成 system prompt，让模型「知道你是谁、今天吃了什么」，而不是泛泛而谈
  *
  *   ② RAG 检索增强（本地知识库作为事实依据）
- *      · 从本地 916 条营养知识库 / 科普文章 / 食物相克 / 健康习惯中按关键词召回 Top-N
+ *      · 从本地营养知识库经 BM25 + 语义向量双路召回、RRF 融合与元数据重排 Top-N
  *      · 作为「参考资料」注入 system prompt，约束模型基于本地数据回答、减少胡编
  *      · 复用识别页同一套「可解释」思路：把召回的知识条目一并展示给用户核对
  *
@@ -20,12 +20,117 @@
  * 密钥只存在于服务端进程，详见 docs/AI接入说明.md。
  */
 
-import { SCIENCE_ARTICLES, FOOD_CONFLICTS, HEALTHY_HABITS } from '@/data/knowledge'
-import { FOOD_DB } from '@/data/foods'
 import { BRAND } from '@/config/brand'
 import { isMockMode } from '@/utils/aiClient'
 import { requestChatStream, requestChat, describeError } from '@/utils/aiClient'
 import { AGENT_TOOLS, executeTool, toolLabel } from '@/utils/aiTools'
+import type { PendingDietRecord, ToolExecutionResult } from '@/utils/aiTools'
+import type { InterventionSimulation } from '@/utils/interventionSimulator'
+import {
+  clonePlan,
+  createExecutionPlan,
+  replanAfterFailure,
+  shouldPlanTask,
+  type AgentExecutionPlan,
+  type AgentPlanEvent
+} from '@/utils/agentPlanner'
+import type {
+  AIError,
+  AIResponse,
+  AIMeta,
+  AISource,
+  ChatMessage,
+  ChatPayload,
+  ChatResponseData,
+  DietRecord,
+  KnowledgeReference,
+  NutritionTargets,
+  ToolCall,
+  UserProfile
+} from '@/types'
+import { hybridKnowledgeSize, retrieveBM25Knowledge, retrieveHybridKnowledge } from '@/utils/hybridRetrieval'
+
+interface MetricsLike {
+  bmi?: number
+  bmiGrade?: { label?: string }
+  bmr?: number
+  tdee?: number
+  dailyCalories?: number
+  dietModeDesc?: string
+}
+
+interface ReportLike {
+  score?: number
+  strengths?: string[]
+  weaknesses?: string[]
+  suggestions?: string[]
+}
+
+export interface NutritionContext {
+  profile?: Partial<UserProfile>
+  metrics?: MetricsLike
+  summary?: Partial<NutritionTargets>
+  targets?: Partial<NutritionTargets>
+  report?: ReportLike
+  water?: number
+  records?: DietRecord[]
+}
+
+export interface ContextFacts {
+  bmi?: number
+  bmiLabel?: string
+  bmr?: number
+  tdee?: number
+  dailyCalories?: number
+  goal?: string
+  todayCalories?: number
+  todayTarget?: number
+  score?: number
+  water?: number
+}
+
+export interface AgentTrace {
+  callId: string
+  name: string
+  emoji: string
+  label: string
+  args: Record<string, unknown>
+  ok?: boolean | null
+  summary?: string
+  pending?: PendingDietRecord
+  interventions?: InterventionSimulation
+}
+
+export interface AgentStep extends AgentTrace {
+  phase: 'start' | 'confirm' | 'done'
+}
+
+export interface NutritionAIResult {
+  ok: boolean
+  text: string
+  source: AISource
+  refs: KnowledgeReference[]
+  toolCalls?: AgentTrace[]
+  plan?: AgentExecutionPlan
+  notice?: string
+  note?: string
+  truncated?: boolean
+  error?: AIError
+  meta?: AIMeta
+  elapsedMs: number
+}
+
+interface AskNutritionParams {
+  question: string
+  history?: Array<Pick<ChatMessage, 'role' | 'content'>>
+  context?: NutritionContext
+  stores?: { dietStore?: unknown; userStore?: unknown } | null
+  onDelta?: (text: string) => void
+  onTool?: (step: AgentStep) => void
+  onPlan?: (event: AgentPlanEvent) => void
+  signal?: AbortSignal
+  maxRounds?: number
+}
 
 /* ===================================================================
  * 一、识别来源标识（与识别页保持一致的语义）
@@ -34,167 +139,31 @@ export const CHAT_SOURCE = {
   CLOUD: 'cloud',
   MOCK: 'mock',
   LOCAL: 'local'
-}
+} as const
 
-export const CHAT_SOURCE_LABELS = {
+export const CHAT_SOURCE_LABELS: Record<AISource, { emoji: string; text: string; tone: string }> = {
   cloud: { emoji: '☁️', text: '云端大模型', tone: 'ok' },
   mock: { emoji: '🧪', text: 'Mock 演示模式', tone: 'warn' },
   local: { emoji: '🔬', text: '本地知识库', tone: 'sub' }
 }
 
 /* ===================================================================
- * 二、本地知识库索引（RAG 检索的数据源）
+ * 二、混合 RAG 检索
  * ------------------------------------------------------------------
- * 索引在模块加载时构建一次（懒构建），之后每次提问只做打分排序，
- * 因此运行开销极小、且完全离线可用。
+ * BM25 词法召回 + 本地语义向量召回，经 RRF 融合、元数据软过滤和重排。
+ * 默认 embedding provider 离线可复现，也可以通过统一接口替换为云端向量模型。
  * =================================================================== */
 
-/** 把任意文本切成小写词元：中文按 2 字滑窗，英文/数字按词切 */
-function tokenize(text) {
-  const s = String(text || '').toLowerCase()
-  const tokens = new Set()
-  // 英文与数字：按非字母数字切分
-  s.replace(/[a-z0-9]+/g, (m) => {
-    if (m.length >= 2) tokens.add(m)
-    return m
-  })
-  // 中文：连续汉字串内做 2 字滑窗，尽量保证召回
-  const han = s.match(/[\u4e00-\u9fa5]+/g) || []
-  han.forEach((seg) => {
-    if (seg.length === 1) tokens.add(seg)
-    for (let i = 0; i + 2 <= seg.length; i++) tokens.add(seg.slice(i, i + 2))
-    if (seg.length >= 4) {
-      for (let i = 0; i + 3 <= seg.length; i++) tokens.add(seg.slice(i, i + 3))
-    }
-  })
-  return [...tokens]
-}
-
-/** 知识库文档索引（懒构建） */
-let DOC_INDEX = null
-
-function buildDocIndex() {
-  const docs = []
-
-  // ① 科普文章（结构最完整，权重最高）
-  SCIENCE_ARTICLES.forEach((a) => {
-    docs.push({
-      id: `article:${a.id}`,
-      kind: '科普文章',
-      emoji: a.emoji || '📖',
-      title: a.title,
-      tags: a.tags || [],
-      text: [a.summary, ...a.sections.map((s) => `${s.h} ${s.p}`)].join(' ')
-    })
-  })
-
-  // ② 食物相克辟谣（回答「XX 和 YY 能不能一起吃」类问题）
-  FOOD_CONFLICTS.forEach((c) => {
-    docs.push({
-      id: `conflict:${c.id}`,
-      kind: '食物搭配',
-      emoji: c.a?.emoji || '🍽️',
-      title: `${c.a?.name || ''} + ${c.b?.name || ''}`,
-      tags: [c.a?.name, c.b?.name, '相克', '搭配', '辟谣'].filter(Boolean),
-      text: `民间说法：${c.desc} 科学结论：${c.truth}`
-    })
-  })
-
-  // ③ 健康习惯（回答「怎么吃更健康 / 生活习惯」类问题）
-  HEALTHY_HABITS.forEach((h, i) => {
-    docs.push({
-      id: `habit:${i}`,
-      kind: '健康习惯',
-      emoji: h.emoji || '✅',
-      title: h.title,
-      tags: ['习惯', '生活方式'],
-      text: h.desc
-    })
-  })
-
-  // ④ 食物营养条目（回答「XX 热量多少 / 有什么营养」类问题）
-  //    只取核心字段，避免索引过大；数量多但每条很短，检索依然很快
-  FOOD_DB.forEach((f) => {
-    docs.push({
-      id: `food:${f.id}`,
-      kind: '食物营养',
-      emoji: f.emoji || '🍽️',
-      title: f.name,
-      tags: [f.category, ...(f.keywords || [])].filter(Boolean),
-      text: `${f.name}（${f.category}）每 100g：热量 ${f.calories}kcal、蛋白质 ${f.protein}g、脂肪 ${f.fat}g、碳水 ${f.carb}g、膳食纤维 ${f.fiber}g、钠 ${f.sodium}mg`
-    })
-  })
-
-  docs.forEach((d) => {
-    d.titleTokens = tokenize(d.title)
-    d.bodyTokens = tokenize(d.text)
-    d.tagTokens = tokenize(d.tags.join(' '))
-  })
-
-  return docs
-}
-
-function getDocIndex() {
-  if (!DOC_INDEX) DOC_INDEX = buildDocIndex()
-  return DOC_INDEX
-}
-
-/**
- * 本地知识库规模（供页面展示）
- * 采用延迟计算：索引体积较大，不在应用启动时就构建，避免拖慢首屏
- */
 export function knowledgeSize() {
-  return { foods: FOOD_DB.length, docs: getDocIndex().length }
+  return hybridKnowledgeSize()
 }
 
-/**
- * 从本地知识库检索与问题最相关的条目
- * @param {string} question 用户提问
- * @param {number} [limit] 返回条数上限
- * @returns {Array<{id, kind, emoji, title, text, score, hitTokens}>}
- */
-export function retrieveKnowledge(question, limit = 4) {
-  const tokens = tokenize(question)
-  if (!tokens.length) return []
+export function retrieveKeywordKnowledge(question: string, limit = 4): KnowledgeReference[] {
+  return retrieveBM25Knowledge(question, limit)
+}
 
-  // 预先把问题词元放进 Set，避免在循环里反复 includes（916 条 × 数十词元）
-  const querySet = new Set(tokens)
-  const scores = []
-
-  getDocIndex().forEach((doc) => {
-    let score = 0
-    const hit = []
-
-    doc.tagTokens.forEach((t) => {
-      if (querySet.has(t)) {
-        score += 6 // 标签命中权重最高（类别 / 别名最能代表主题）
-        hit.push(t)
-      }
-    })
-    doc.titleTokens.forEach((t) => {
-      if (querySet.has(t)) {
-        score += 5 // 标题命中
-        hit.push(t)
-      }
-    })
-    doc.bodyTokens.forEach((t) => {
-      if (querySet.has(t)) {
-        score += 1 // 正文命中
-        hit.push(t)
-      }
-    })
-
-    // 类别兜底：科普文章与知识类条目在并列时优先（内容更完整、更适合作答）
-    if (score > 0) {
-      if (doc.kind === '科普文章') score += 2
-      if (doc.kind === '健康习惯') score += 1
-      scores.push({ ...doc, score, hitTokens: [...new Set(hit)] })
-    }
-  })
-
-  return scores
-    .sort((a, b) => b.score - a.score || String(a.title).localeCompare(String(b.title)))
-    .slice(0, limit)
+export function retrieveKnowledge(question: string, limit = 4): KnowledgeReference[] {
+  return retrieveHybridKnowledge(question, { limit })
 }
 
 /* ===================================================================
@@ -206,14 +175,14 @@ export function retrieveKnowledge(question, limit = 4) {
  * @param {{profile: object, metrics: object, summary: object, targets: object, report: object, water: number, records: object[]}} input
  * @returns {{text: string, facts: object}} text 为提示词片段，facts 为结构化事实（供 UI 展示）
  */
-export function buildContextText(input = {}) {
+export function buildContextText(input: NutritionContext = {}): { text: string; facts: ContextFacts } {
   const { profile = {}, metrics = {}, summary = {}, targets = {}, report = {}, water = 0, records = [] } = input
 
   const lines = []
-  const facts = {}
+  const facts: ContextFacts = {}
 
   // ---- 身体指标 ----
-  if (profile.height > 0 && profile.weight > 0) {
+  if (Number(profile.height) > 0 && Number(profile.weight) > 0) {
     facts.bmi = metrics.bmi
     facts.bmiLabel = metrics.bmiGrade?.label
     facts.bmr = Math.round(metrics.bmr || 0)
@@ -234,7 +203,8 @@ export function buildContextText(input = {}) {
   }
 
   if (profile.goal) {
-    const goalText = { lose: '减脂', gain: '增肌', keep: '保持体重' }[profile.goal] || '保持体重'
+    const goalText =
+      ({ lose: '减脂', gain: '增肌', keep: '保持体重' } as Record<string, string>)[profile.goal] || '保持体重'
     facts.goal = goalText
     lines.push(`【用户目标】${goalText}`)
   }
@@ -256,12 +226,15 @@ export function buildContextText(input = {}) {
       `饮水 ${Math.round(water || 0)}ml。今日饮食健康评分 ${report.score ?? '—'} 分。`
   )
 
-  if (Array.isArray(report.strengths) && report.strengths.length) lines.push(`【今日饮食优点】${report.strengths.join('；')}`)
-  if (Array.isArray(report.weaknesses) && report.weaknesses.length) lines.push(`【今日饮食待改进】${report.weaknesses.join('；')}`)
-  if (Array.isArray(report.suggestions) && report.suggestions.length) lines.push(`【系统给出的改进建议】${report.suggestions.join('；')}`)
+  if (Array.isArray(report.strengths) && report.strengths.length)
+    lines.push(`【今日饮食优点】${report.strengths.join('；')}`)
+  if (Array.isArray(report.weaknesses) && report.weaknesses.length)
+    lines.push(`【今日饮食待改进】${report.weaknesses.join('；')}`)
+  if (Array.isArray(report.suggestions) && report.suggestions.length)
+    lines.push(`【系统给出的改进建议】${report.suggestions.join('；')}`)
 
   if (records.length) {
-    const names = records.slice(0, 12).map((r) => `${r.name}(${r.grams}${r.unit === '100ml' ? 'ml' : 'g'})`)
+    const names = records.slice(0, 12).map(r => `${r.name}(${r.grams}${r.unit === '100ml' ? 'ml' : 'g'})`)
     lines.push(`【今日已记录的食物】${names.join('、')}${records.length > 12 ? ' 等' : ''}`)
   }
 
@@ -273,11 +246,14 @@ export function buildContextText(input = {}) {
  * @param {string} contextText 个性化上下文
  * @param {Array} refs RAG 召回的知识条目
  */
-export function buildSystemPrompt(contextText = '', refs = []) {
+export function buildSystemPrompt(contextText = '', refs: KnowledgeReference[] = []): string {
   const refBlock = refs.length
-    ? '\n\n【参考资料（来自本应用内置营养知识库，回答时请优先依据以下内容，不要与它冲突）】\n' +
+    ? '\n\n【参考资料（由 BM25 + 语义向量混合检索召回，回答时请优先依据且不要与它冲突）】\n' +
       refs
-        .map((r, i) => `${i + 1}. [${r.kind}] ${r.title}：${String(r.text).slice(0, 300)}`)
+        .map(
+          (r, i) =>
+            `${i + 1}. [${r.kind}] ${r.title}（检索置信度 ${r.retrieval?.confidence ?? Math.round(r.score)}%）：${String(r.text).slice(0, 300)}`
+        )
         .join('\n')
     : ''
 
@@ -317,7 +293,7 @@ export function buildSystemPrompt(contextText = '', refs = []) {
  * @param {string} question 用户提问
  * @returns {{text: string, refs: Array, matched: boolean}}
  */
-export function localAnswer(question = '') {
+export function localAnswer(question = ''): { text: string; refs: KnowledgeReference[]; matched: boolean } {
   const refs = retrieveKnowledge(question, 4)
 
   if (!refs.length) {
@@ -361,10 +337,11 @@ const MAX_TURNS = 12
 const MAX_AGENT_ROUNDS = 4
 
 /** 解析模型返回的工具参数（标准为 JSON 字符串，也兼容已解析对象） */
-function parseToolArgs(raw) {
-  if (raw && typeof raw === 'object') return raw
+function parseToolArgs(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>
   try {
-    return JSON.parse(String(raw || '{}'))
+    const parsed = JSON.parse(String(raw || '{}')) as unknown
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
   } catch {
     return {}
   }
@@ -399,16 +376,25 @@ export async function askNutritionAI({
   stores = null,
   onDelta,
   onTool,
+  onPlan,
   signal,
   maxRounds = MAX_AGENT_ROUNDS
-} = {}) {
+}: AskNutritionParams): Promise<NutritionAIResult> {
   const startedAt = Date.now()
   const emit = typeof onDelta === 'function' ? onDelta : () => {}
   const emitTool = typeof onTool === 'function' ? onTool : () => {}
+  const emitPlan = typeof onPlan === 'function' ? onPlan : () => {}
 
   const q = String(question || '').trim()
   if (!q) {
-    return { ok: false, text: '', source: CHAT_SOURCE.LOCAL, refs: [], error: { code: 'EMPTY', message: '请输入你的问题' }, elapsedMs: 0 }
+    return {
+      ok: false,
+      text: '',
+      source: CHAT_SOURCE.LOCAL,
+      refs: [],
+      error: { code: 'EMPTY', message: '请输入你的问题' },
+      elapsedMs: 0
+    }
   }
 
   // ① RAG 检索：无论走云端还是本地都在用，保证「回答有据可依」
@@ -416,31 +402,41 @@ export async function askNutritionAI({
 
   // ② 组装 messages：system（个性化 + 参考资料）+ 最近若干轮对话 + 本次提问
   const contextText = buildContextText(context).text
-  const messages = [{ role: 'system', content: buildSystemPrompt(contextText, refs) }]
+  const messages: ChatMessage[] = [{ role: 'system', content: buildSystemPrompt(contextText, refs) }]
   history
-    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
+    .filter((m): m is Pick<ChatMessage, 'role' | 'content'> & { role: 'user' | 'assistant' } =>
+      Boolean(m && (m.role === 'user' || m.role === 'assistant') && m.content)
+    )
     .slice(-MAX_TURNS)
-    .forEach((m) => messages.push({ role: m.role, content: m.content }))
+    .forEach(m => messages.push({ role: m.role, content: m.content }))
   messages.push({ role: 'user', content: q })
 
   /* ---- 前端纯 Mock 模式：完全不发请求，直接用本地知识库作答 ---- */
-  if (isMockMode()) {
+  if (isMockMode() && !(stores?.dietStore && stores?.userStore && shouldPlanTask(q))) {
     const local = localAnswer(q)
     await typewriter(local.text, emit, signal)
-    return { ok: true, text: local.text, source: CHAT_SOURCE.LOCAL, refs: local.refs.length ? local.refs : refs, note: '前端已开启 VITE_AI_MOCK=1，未发起网络请求', elapsedMs: Date.now() - startedAt }
+    return {
+      ok: true,
+      text: local.text,
+      source: CHAT_SOURCE.LOCAL,
+      refs: local.refs.length ? local.refs : refs,
+      note: '前端已开启 VITE_AI_MOCK=1，未发起网络请求',
+      elapsedMs: Date.now() - startedAt
+    }
   }
 
   /** 是否具备执行 Agent 工具的条件（两个 store 缺一不可） */
   const agentReady = Boolean(stores?.dietStore && stores?.userStore)
   /** 已执行的工具轨迹（随结果返回，供页面展示） */
-  const toolTrace = []
+  const toolTrace: AgentTrace[] = []
+  let executionPlan: AgentExecutionPlan | undefined
 
   /**
    * 发起一次模型请求（流式优先，浏览器不支持流式时自动退化为非流式）
    * @param {boolean} withTools 是否携带工具声明
    */
-  const callModel = async (withTools) => {
-    const payload = withTools ? { messages, tools: AGENT_TOOLS } : { messages }
+  const callModel = async (withTools: boolean): Promise<AIResponse<ChatResponseData>> => {
+    const payload: ChatPayload = withTools ? { messages, tools: AGENT_TOOLS } : { messages }
     let res = await requestChatStream(payload, { onDelta: emit, signal })
     if (!res.ok && res.error?.code === 'NO_STREAM_SUPPORT') {
       res = await requestChat(payload, { signal })
@@ -453,12 +449,31 @@ export async function askNutritionAI({
     return res
   }
 
+  const interventionFallback = (): string | null => {
+    const simulation = toolTrace.find(item => item.interventions)?.interventions
+    if (!simulation?.plans?.length) return null
+    const best = [...simulation.plans].sort(
+      (left, right) =>
+        right.deltas.score - left.deltas.score ||
+        left.after.sugar - right.after.sugar ||
+        right.after.fiber - left.after.fiber
+    )[0]
+    return (
+      `（本地干预模式）已基于今天的真实饮食比较 ${simulation.plans.length} 个最小调整方案。` +
+      `当前综合收益最高的是“${best.title}”，预计健康评分 ${best.before.score} → ${best.after.score}。\n\n` +
+      '请在上方方案卡中核对糖、蛋白质、热量和具体动作；可选择“应用到今天”，也可以创建 7 天实验，用后续真实打卡校准预测结果。'
+    )
+  }
+
   /** 失败兜底：本地知识库作答（保证对话永不中断） */
-  const fallbackLocal = async (res) => {
-    const local = localAnswer(q)
+  const fallbackLocal = async (res: AIResponse<ChatResponseData>): Promise<NutritionAIResult> => {
+    const interventionText = interventionFallback()
+    const local = interventionText ? { text: interventionText, refs: [] } : localAnswer(q)
     const reason = describeError(res?.error)
     const code = res?.error?.code ? `（错误码 ${res.error.code}）` : ''
-    const prefix = `☁️ 云端对话失败：${reason}${code}，已自动回退到本地营养知识库。\n\n`
+    const prefix = interventionText
+      ? `☁️ 云端对话失败：${reason}${code}，已自动切换到本地干预引擎。\n\n`
+      : `☁️ 云端对话失败：${reason}${code}，已自动回退到本地营养知识库。\n\n`
     const text = prefix + local.text
     await typewriter(text, emit, signal)
 
@@ -466,21 +481,167 @@ export async function askNutritionAI({
       ok: true,
       text,
       source: CHAT_SOURCE.LOCAL,
-      refs: local.refs.length ? local.refs : refs,
+      refs: interventionText ? [] : local.refs.length ? local.refs : refs,
       toolCalls: toolTrace,
+      plan: executionPlan,
       notice: `${reason}${code}`,
       error: res?.error,
       elapsedMs: Date.now() - startedAt
     }
   }
 
-  /* ---- ③ Agent 循环：模型 → 工具 → 模型 …，直到模型给出最终回答 ---- */
+  /* ---- ③ Plan-and-Execute：复杂任务先规划，再按步骤执行和校验 ---- */
+  if (agentReady && shouldPlanTask(q)) {
+    executionPlan = {
+      goal: q,
+      summary: '正在分析任务并选择所需数据',
+      steps: [],
+      status: 'planning',
+      revision: 1,
+      source: 'fallback'
+    }
+    emitPlan({ phase: 'planning', plan: clonePlan(executionPlan) })
+    executionPlan = await createExecutionPlan(q, signal)
+    if (signal?.aborted) {
+      return {
+        ok: true,
+        text: '',
+        source: CHAT_SOURCE.CLOUD,
+        refs,
+        toolCalls: toolTrace,
+        plan: executionPlan,
+        elapsedMs: Date.now() - startedAt
+      }
+    }
+
+    executionPlan.status = 'executing'
+    emitPlan({ phase: 'planned', plan: clonePlan(executionPlan) })
+    const planResults: string[] = []
+
+    for (let index = 0; index < executionPlan.steps.length; index += 1) {
+      if (signal?.aborted) break
+      const step = executionPlan.steps[index]
+      step.status = 'running'
+      emitPlan({ phase: 'step_start', plan: clonePlan(executionPlan) })
+
+      const info = toolLabel(step.tool)
+      const callId = `plan_${executionPlan.revision}_${step.id}`
+      const trace: AgentTrace = {
+        callId,
+        name: step.tool,
+        emoji: info.emoji,
+        label: info.label,
+        args: step.args
+      }
+      emitTool({ ...trace, phase: 'start' })
+
+      let output: ToolExecutionResult
+      try {
+        output = executeTool(step.tool, step.args, stores as Parameters<typeof executeTool>[2])
+      } catch (err: unknown) {
+        output = {
+          ok: false,
+          summary: '工具执行异常',
+          content: `工具执行异常：${err instanceof Error ? err.message : String(err)}`
+        }
+      }
+
+      step.status = output.ok ? 'completed' : 'failed'
+      step.resultSummary = output.summary
+      planResults.push(`${step.title}（${step.tool}）：${output.content}`)
+
+      if (output.needConfirm && output.pending) {
+        emitTool({ ...trace, phase: 'confirm', pending: output.pending })
+        toolTrace.push({ ...trace, ok: null, summary: output.summary, pending: output.pending })
+      } else {
+        emitTool({
+          ...trace,
+          phase: 'done',
+          ok: output.ok,
+          summary: output.summary,
+          interventions: output.interventions
+        })
+        toolTrace.push({ ...trace, ok: output.ok, summary: output.summary, interventions: output.interventions })
+      }
+      emitPlan({ phase: 'step_done', plan: clonePlan(executionPlan) })
+
+      if (!output.ok && executionPlan.revision < 2) {
+        const beforeRevision = executionPlan.revision
+        replanAfterFailure(executionPlan, step)
+        if (executionPlan.revision > beforeRevision) {
+          emitPlan({ phase: 'replanned', plan: clonePlan(executionPlan) })
+        }
+      }
+    }
+
+    if (signal?.aborted) {
+      executionPlan.status = 'failed'
+      return {
+        ok: true,
+        text: '',
+        source: CHAT_SOURCE.CLOUD,
+        refs,
+        toolCalls: toolTrace,
+        plan: executionPlan,
+        elapsedMs: Date.now() - startedAt
+      }
+    }
+
+    executionPlan.status = 'completed'
+    emitPlan({ phase: 'completed', plan: clonePlan(executionPlan) })
+    messages.splice(messages.length - 1, 0, {
+      role: 'system',
+      content:
+        `【Agent 执行计划】${executionPlan.summary}\n` +
+        `${executionPlan.adjustment ? `【计划调整】${executionPlan.adjustment}\n` : ''}` +
+        `【已执行的真实数据工具结果】\n${planResults.join('\n')}\n` +
+        '请严格依据以上工具结果回答用户，并完成最终校验；数据不足时明确说明局限。不要声称执行未列出的工具。'
+    })
+
+    if (isMockMode()) {
+      const interventionText = interventionFallback()
+      const local = interventionText ? { text: interventionText, refs: [] } : localAnswer(q)
+      const planSummary =
+        `（离线规划模式）已按 ${executionPlan.steps.length} 步计划读取本地真实数据。\n\n` +
+        `执行摘要：\n${executionPlan.steps.map(step => `· ${step.title}：${step.resultSummary || '已完成'}`).join('\n')}\n\n`
+      const text = planSummary + local.text
+      await typewriter(text, emit, signal)
+      return {
+        ok: true,
+        text,
+        source: CHAT_SOURCE.LOCAL,
+        refs: interventionText ? [] : local.refs.length ? local.refs : refs,
+        toolCalls: toolTrace,
+        plan: executionPlan,
+        note: '前端离线模式使用确定性计划与本地数据工具，未发起网络请求',
+        elapsedMs: Date.now() - startedAt
+      }
+    }
+
+    const plannedRes = await callModel(false)
+    if (!plannedRes.ok) return fallbackLocal(plannedRes)
+    return {
+      ok: true,
+      text: plannedRes.data?.reply || '',
+      source: plannedRes.source || CHAT_SOURCE.CLOUD,
+      refs,
+      toolCalls: toolTrace,
+      plan: executionPlan,
+      notice: plannedRes.notice || '',
+      truncated: Boolean(plannedRes.truncated),
+      error: plannedRes.error,
+      meta: plannedRes.meta || {},
+      elapsedMs: Date.now() - startedAt
+    }
+  }
+
+  /* ---- ④ 反应式 Agent：简单任务由模型按需选择工具 ---- */
   for (let round = 0; round < maxRounds; round += 1) {
     const res = await callModel(agentReady)
     if (!res.ok) return fallbackLocal(res)
     if (signal?.aborted) break
 
-    const calls = Array.isArray(res.data?.toolCalls) ? res.data.toolCalls : []
+    const calls: ToolCall[] = Array.isArray(res.data?.toolCalls) ? res.data.toolCalls : []
 
     // 没有工具调用（或工具环境不可用）→ 本轮就是最终回答
     if (!calls.length || !agentReady) {
@@ -490,6 +651,7 @@ export async function askNutritionAI({
         source: res.source || CHAT_SOURCE.CLOUD,
         refs,
         toolCalls: toolTrace,
+        plan: executionPlan,
         notice: res.notice || '',
         truncated: Boolean(res.truncated),
         error: res.error,
@@ -505,16 +667,20 @@ export async function askNutritionAI({
       const name = call?.function?.name || ''
       const args = parseToolArgs(call?.function?.arguments)
       const info = toolLabel(name)
-      const callId = call.id || `${name}_${round}_${toolTrace.length}`
-      const step = { callId, name, emoji: info.emoji, label: info.label, args }
+      const callId: string = call.id || `${name}_${round}_${toolTrace.length}`
+      const step: AgentTrace = { callId, name, emoji: info.emoji, label: info.label, args }
 
       emitTool({ ...step, phase: 'start' })
 
-      let output
+      let output: ToolExecutionResult
       try {
-        output = executeTool(name, args, stores)
-      } catch (err) {
-        output = { ok: false, summary: '工具执行异常', content: `工具执行异常：${err?.message || err}` }
+        output = executeTool(name, args, stores as Parameters<typeof executeTool>[2])
+      } catch (err: unknown) {
+        output = {
+          ok: false,
+          summary: '工具执行异常',
+          content: `工具执行异常：${err instanceof Error ? err.message : String(err)}`
+        }
       }
 
       if (output.needConfirm && output.pending) {
@@ -525,9 +691,15 @@ export async function askNutritionAI({
         messages.push({ role: 'tool', tool_call_id: callId, content: output.content })
         toolTrace.push({ ...step, ok: null, summary: output.summary, pending: output.pending })
       } else {
-        emitTool({ ...step, phase: 'done', ok: output.ok, summary: output.summary })
+        emitTool({
+          ...step,
+          phase: 'done',
+          ok: output.ok,
+          summary: output.summary,
+          interventions: output.interventions
+        })
         messages.push({ role: 'tool', tool_call_id: callId, content: output.content })
-        toolTrace.push({ ...step, ok: output.ok, summary: output.summary })
+        toolTrace.push({ ...step, ok: output.ok, summary: output.summary, interventions: output.interventions })
       }
     }
 
@@ -542,6 +714,7 @@ export async function askNutritionAI({
       source: CHAT_SOURCE.CLOUD,
       refs,
       toolCalls: toolTrace,
+      plan: executionPlan,
       elapsedMs: Date.now() - startedAt
     }
   }
@@ -555,6 +728,7 @@ export async function askNutritionAI({
       source: finalRes.source || CHAT_SOURCE.CLOUD,
       refs,
       toolCalls: toolTrace,
+      plan: executionPlan,
       notice: finalRes.notice || '',
       truncated: Boolean(finalRes.truncated),
       error: finalRes.error,
@@ -566,12 +740,17 @@ export async function askNutritionAI({
 }
 
 /** 把整段文本按小段吐出，模拟流式观感（本地兜底与前端 Mock 使用） */
-async function typewriter(text, emit, signal, chunkSize = 4) {
+async function typewriter(
+  text: string,
+  emit: (text: string) => void,
+  signal?: AbortSignal,
+  chunkSize = 4
+): Promise<void> {
   const chars = [...String(text || '')]
   for (let i = 0; i < chars.length; i += chunkSize) {
     if (signal?.aborted) return
     emit(chars.slice(i, i + chunkSize).join(''))
-    await new Promise((r) => setTimeout(r, 16))
+    await new Promise(r => setTimeout(r, 16))
   }
 }
 
@@ -587,5 +766,6 @@ export const SUGGESTED_QUESTIONS = [
   { emoji: '🍬', text: '一杯全糖奶茶大概含多少糖？', tag: '控糖' },
   { emoji: '💧', text: '每天应该喝多少水才够？', tag: '习惯' },
   { emoji: '🛵', text: '点外卖怎么选才更健康？', tag: '实操' },
+  { emoji: '🧪', text: '模拟几种今日饮食优化方案', tag: '决策' },
   { emoji: '🥬', text: '菠菜和豆腐到底能不能一起吃？', tag: '搭配' }
 ]

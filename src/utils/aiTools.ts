@@ -18,6 +18,120 @@
  */
 
 import { searchFood } from '@/data/foods'
+import { simulateDietInterventions } from '@/utils/interventionSimulator'
+import type { InterventionSimulation } from '@/utils/interventionSimulator'
+import type { DietRecord, FoodItem, MealType, NutritionTargets, UserProfile } from '@/types'
+
+export type AgentToolName =
+  | 'read_today_summary'
+  | 'read_diet_history'
+  | 'read_user_profile'
+  | 'search_food_nutrition'
+  | 'get_meal_plan'
+  | 'simulate_diet_interventions'
+  | 'add_diet_record'
+
+interface ReportItem {
+  label: string
+  value: number
+  unit: string
+  target: number
+}
+
+interface HistoryDay {
+  date: string
+  weekday: string
+  calories: number
+  target: number
+  protein: number
+  fat: number
+  carb: number
+  fiber: number
+  water: number
+  score: number
+  records: DietRecord[]
+}
+
+interface MealOption {
+  name: string
+  nutrition?: Partial<NutritionTargets>
+  portionNote?: string
+}
+
+interface MealPlanLike {
+  breakfast?: MealOption
+  lunch?: MealOption
+  dinner?: MealOption
+  fruit?: MealOption
+  snack?: MealOption
+  reasons?: string[]
+  gap?: { notes?: string[] }
+  remainder?: { calories?: number }
+  workout?: {
+    label?: string
+    weekly?: string
+    items?: Array<{ name: string; duration: string }>
+  }
+}
+
+interface DietStoreLike {
+  todayKey: string
+  summary: Partial<NutritionTargets>
+  targets: Partial<NutritionTargets>
+  report: {
+    score?: number
+    grade?: { label?: string }
+    overItems?: ReportItem[]
+    lowItems?: ReportItem[]
+  }
+  water: number
+  records: DietRecord[]
+  historyDays: HistoryDay[]
+  mealPlan?: MealPlanLike
+  addRecord(input: { mealType: MealType; foodId: string; grams: number }): DietRecord | null
+  removeRecord(id: string): void
+}
+
+interface UserStoreLike {
+  profile: UserProfile
+  metrics: {
+    bmi?: number
+    bmiGrade?: { label?: string }
+    bmr?: number
+    tdee?: number
+    dailyCalories?: number
+    dietMode?: string
+    dietModeDesc?: string
+    targets?: Partial<NutritionTargets>
+  }
+}
+
+export interface ToolContext {
+  dietStore?: DietStoreLike
+  userStore?: UserStoreLike
+}
+
+interface AddRecordStore {
+  addRecord(input: { mealType: MealType; foodId: string; grams: number }): object | null
+}
+
+export interface PendingDietRecord {
+  foodId: string
+  name: string
+  emoji: string
+  grams: number
+  unit: string
+  mealType: MealType
+}
+
+export interface ToolExecutionResult {
+  ok: boolean
+  summary: string
+  content: string
+  needConfirm?: boolean
+  pending?: PendingDietRecord
+  interventions?: InterventionSimulation
+}
 
 /* ===================================================================
  * 一、工具声明（发给模型的 JSON Schema）
@@ -87,6 +201,15 @@ export const AGENT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'simulate_diet_interventions',
+      description:
+        '基于用户今天的真实饮食记录，模拟 2-3 种最小调整方案，比较调整前后的热量、糖、蛋白质、纤维和健康评分。当用户问「怎么改善 / 换掉什么 / 调整后会怎样 / 给我几个优化方案」时调用。该工具只模拟，不会修改记录。',
+      parameters: { type: 'object', properties: {}, required: [] }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'add_diet_record',
       description:
         '在用户明确要求「帮我记录 / 记一下吃了什么」时调用，生成一条待确认的饮食记录卡片。注意：本工具不会直接写入，必须等用户在页面上点击「确认记录」后才会真正落库，因此调用后请告知用户去卡片上确认。',
@@ -110,37 +233,38 @@ export const AGENT_TOOLS = [
 /* ===================================================================
  * 二、工具中文展示名（用于对话中的调用轨迹）
  * =================================================================== */
-export const TOOL_LABELS = {
+export const TOOL_LABELS: Record<AgentToolName, { emoji: string; label: string }> = {
   read_today_summary: { emoji: '📊', label: '读取今日营养汇总' },
   read_diet_history: { emoji: '📅', label: '读取历史饮食记录' },
   read_user_profile: { emoji: '🧬', label: '读取健康档案' },
   search_food_nutrition: { emoji: '🔍', label: '检索食物营养库' },
   get_meal_plan: { emoji: '🍱', label: '生成膳食推荐' },
+  simulate_diet_interventions: { emoji: '🧪', label: '模拟饮食调整效果' },
   add_diet_record: { emoji: '📝', label: '记录饮食' }
 }
 
 /** 取工具展示信息（未知工具兜底） */
-export function toolLabel(name) {
-  return TOOL_LABELS[name] || { emoji: '🛠️', label: `调用 ${name}` }
+export function toolLabel(name: string): { emoji: string; label: string } {
+  return TOOL_LABELS[name as AgentToolName] || { emoji: '🛠️', label: `调用 ${name}` }
 }
 
 /* ===================================================================
  * 三、本地执行器
  * =================================================================== */
 /** 限制数值区间 */
-function clamp(v, min, max) {
+function clamp(v: unknown, min: number, max: number): number {
   const n = Number(v)
   if (!Number.isFinite(n)) return min
   return Math.min(max, Math.max(min, n))
 }
 
 /** 保留一位小数 */
-function r1(n) {
+function r1(n: unknown): number {
   return Math.round((Number(n) || 0) * 10) / 10
 }
 
 /** 把营养合计压成紧凑对象，避免 tool 消息过长 */
-function compactNutrition(n = {}) {
+function compactNutrition(n: Partial<NutritionTargets> = {}) {
   return {
     kcal: Math.round(Number(n.calories) || 0),
     protein: r1(n.protein),
@@ -153,15 +277,15 @@ function compactNutrition(n = {}) {
 }
 
 /** 失败/占位结果 */
-function fail(message) {
+function fail(message: string): ToolExecutionResult {
   return { ok: false, summary: message, content: message }
 }
 
 /** 合法餐次 */
-const MEAL_TYPES = ['早餐', '午餐', '晚餐', '零食']
+const MEAL_TYPES: MealType[] = ['早餐', '午餐', '晚餐', '零食']
 
 /** 按当前时间推断餐次：5-10 早餐 / 10-15 午餐 / 15-21 晚餐 / 其余零食 */
-function inferMealType(date = new Date()) {
+function inferMealType(date = new Date()): MealType {
   const h = date.getHours()
   if (h >= 5 && h < 10) return '早餐'
   if (h >= 10 && h < 15) return '午餐'
@@ -176,7 +300,11 @@ function inferMealType(date = new Date()) {
  * @param {{dietStore: object, userStore: object}} ctx Pinia store 实例
  * @returns {{ok: boolean, summary: string, content: string}} content 会作为 tool 消息回填给模型
  */
-export function executeTool(name, args = {}, ctx = {}) {
+export function executeTool(
+  name: string,
+  args: Record<string, unknown> = {},
+  ctx: ToolContext = {}
+): ToolExecutionResult {
   const { dietStore, userStore } = ctx
   if (!dietStore || !userStore) return fail('工具运行环境未就绪（缺少数据源）')
 
@@ -193,9 +321,13 @@ export function executeTool(name, args = {}, ctx = {}) {
         饮水ml: Math.round(Number(dietStore.water) || 0),
         健康评分: report.score ?? null,
         评分等级: report.grade?.label || '',
-        超标项: (report.overItems || []).map((i) => `${i.label} ${i.value}${i.unit}（目标 ${i.target}${i.unit}）`),
-        偏少项: (report.lowItems || []).map((i) => `${i.label} ${i.value}${i.unit}（目标 ${i.target}${i.unit}）`),
-        已记录食物: (dietStore.records || []).map((r) => `${r.mealType} ${r.name} ${r.grams}g`)
+        超标项: (report.overItems || []).map(
+          (i: ReportItem) => `${i.label} ${i.value}${i.unit}（目标 ${i.target}${i.unit}）`
+        ),
+        偏少项: (report.lowItems || []).map(
+          (i: ReportItem) => `${i.label} ${i.value}${i.unit}（目标 ${i.target}${i.unit}）`
+        ),
+        已记录食物: (dietStore.records || []).map((r: DietRecord) => `${r.mealType} ${r.name} ${r.grams}g`)
       }
       const kcal = Math.round(summary.calories || 0)
       const target = Math.round(targets.calories || 0)
@@ -211,7 +343,7 @@ export function executeTool(name, args = {}, ctx = {}) {
       const days = clamp(args.days || 3, 1, 7)
       const list = (dietStore.historyDays || []).slice(0, days)
       if (!list.length) return fail('没有可用的历史饮食记录')
-      const data = list.map((d) => ({
+      const data = list.map((d: HistoryDay) => ({
         日期: d.date,
         星期: d.weekday,
         热量kcal: d.calories,
@@ -222,7 +354,7 @@ export function executeTool(name, args = {}, ctx = {}) {
         膳食纤维g: d.fiber,
         饮水ml: d.water,
         健康评分: d.score,
-        记录: (d.records || []).map((r) => `${r.mealType} ${r.name} ${r.grams}g`)
+        记录: (d.records || []).map((r: DietRecord) => `${r.mealType} ${r.name} ${r.grams}g`)
       }))
       return {
         ok: true,
@@ -242,14 +374,14 @@ export function executeTool(name, args = {}, ctx = {}) {
           content: '用户尚未填写身高体重，无法计算 BMI / BMR / TDEE。请引导其到「BMI/BMR 测评」页补充身体数据。'
         }
       }
-      const goalText = { lose: '减脂', gain: '增肌', keep: '保持体重' }[p.goal] || '保持体重'
+      const goalText: Record<UserProfile['goal'], string> = { lose: '减脂', gain: '增肌', keep: '保持体重' }
       const data = {
         性别: p.gender === 'female' ? '女' : '男',
         年龄: p.age,
         身高cm: p.height,
         体重kg: p.weight,
         活动强度: p.activity || '',
-        目标: goalText,
+        目标: goalText[p.goal],
         BMI: m.bmi,
         BMI判定: m.bmiGrade?.label || '',
         BMR基础代谢kcal: Math.round(m.bmr || 0),
@@ -271,7 +403,7 @@ export function executeTool(name, args = {}, ctx = {}) {
       const keyword = String(args.keyword || '').trim()
       if (!keyword) return fail('缺少检索关键词')
       const limit = clamp(args.limit || 5, 1, 10)
-      const list = searchFood(keyword, limit)
+      const list = searchFood(keyword, limit) as FoodItem[]
       if (!list.length) {
         return {
           ok: true,
@@ -279,7 +411,7 @@ export function executeTool(name, args = {}, ctx = {}) {
           content: `食物营养库中没有匹配「${keyword}」的条目，请不要编造数据，可换一个更通用的名称再查。`
         }
       }
-      const data = list.map((f) => ({
+      const data = list.map((f: FoodItem) => ({
         名称: f.name,
         分类: f.category,
         别名: (f.keywords || []).slice(0, 6),
@@ -287,7 +419,10 @@ export function executeTool(name, args = {}, ctx = {}) {
       }))
       return {
         ok: true,
-        summary: `命中 ${list.length} 条：${list.slice(0, 3).map((f) => f.name).join('、')}`,
+        summary: `命中 ${list.length} 条：${list
+          .slice(0, 3)
+          .map((f: FoodItem) => f.name)
+          .join('、')}`,
         content: JSON.stringify(data)
       }
     }
@@ -296,7 +431,7 @@ export function executeTool(name, args = {}, ctx = {}) {
     case 'get_meal_plan': {
       const plan = dietStore.mealPlan
       if (!plan) return fail('膳食推荐暂不可用')
-      const pick = (meal) =>
+      const pick = (meal?: MealOption) =>
         meal
           ? {
               名称: meal.name,
@@ -316,7 +451,7 @@ export function executeTool(name, args = {}, ctx = {}) {
         剩余可摄入kcal: plan.remainder?.calories ?? 0,
         运动建议: plan.workout?.label
           ? `${plan.workout.label}（${plan.workout.weekly || ''}）：${(plan.workout.items || [])
-              .map((i) => `${i.name} ${i.duration}`)
+              .map((i: { name: string; duration: string }) => `${i.name} ${i.duration}`)
               .join('、')}`
           : ''
       }
@@ -328,11 +463,38 @@ export function executeTool(name, args = {}, ctx = {}) {
       }
     }
 
+    /* ---------- 营养干预模拟（只读，不修改真实记录） ---------- */
+    case 'simulate_diet_interventions': {
+      const interventions = simulateDietInterventions({
+        records: dietStore.records || [],
+        targets: dietStore.targets || {},
+        water: dietStore.water || 0
+      })
+      if (!interventions.plans.length) return fail('当前记录不足，暂时无法生成有效调整方案')
+      return {
+        ok: true,
+        summary: `已比较 ${interventions.plans.length} 个调整方案`,
+        interventions,
+        content: JSON.stringify({
+          当前状态: interventions.before,
+          候选方案: interventions.plans.map(plan => ({
+            名称: plan.title,
+            调整: plan.actions.map(action => action.label),
+            解释: plan.rationale,
+            预计变化: plan.deltas,
+            调整后: plan.after
+          })),
+          给模型的指示:
+            '请比较方案的营养收益和执行难度，说明为什么优先调整主要糖来源而不是盲目减少主食；提醒用户必须在页面卡片上确认后才会修改记录。'
+        })
+      }
+    }
+
     /* ---------- 记录饮食（写入型：只生成待确认卡片，不直接落库） ---------- */
     case 'add_diet_record': {
       const foodName = String(args.foodName || '').trim()
       if (!foodName) return fail('缺少食物名称')
-      const hit = searchFood(foodName, 1)[0]
+      const hit = (searchFood(foodName, 1) as FoodItem[])[0]
       if (!hit) {
         return {
           ok: false,
@@ -341,8 +503,9 @@ export function executeTool(name, args = {}, ctx = {}) {
         }
       }
       const grams = clamp(args.grams || 100, 1, 2000)
-      const mealType = MEAL_TYPES.includes(args.mealType) ? args.mealType : inferMealType()
-      const pending = {
+      const requestedMeal = String(args.mealType || '') as MealType
+      const mealType = MEAL_TYPES.includes(requestedMeal) ? requestedMeal : inferMealType()
+      const pending: PendingDietRecord = {
         foodId: hit.id,
         name: hit.name,
         emoji: hit.emoji || '🍽️',
@@ -376,9 +539,19 @@ export function executeTool(name, args = {}, ctx = {}) {
  * @param {object} dietStore Pinia dietStore 实例
  * @returns {{ok: boolean, summary: string}}
  */
-export function confirmAddDietRecord(pending, dietStore) {
+export function confirmAddDietRecord(
+  pending: PendingDietRecord | null | undefined,
+  dietStore: AddRecordStore | null | undefined
+): { ok: boolean; summary: string } {
   if (!pending?.foodId || !dietStore) return { ok: false, summary: '记录已失效，请重新发起' }
-  const rec = dietStore.addRecord({ mealType: pending.mealType, foodId: pending.foodId, grams: pending.grams })
-  if (!rec) return { ok: false, summary: '写入失败：食物不存在' }
-  return { ok: true, summary: `已记录到今日饮食：${rec.mealType} ${rec.name} ${rec.grams}${rec.unit === '100ml' ? 'ml' : 'g'}` }
+  const rec = dietStore.addRecord({
+    mealType: pending.mealType,
+    foodId: pending.foodId,
+    grams: pending.grams
+  }) as Partial<DietRecord> | null
+  if (!rec?.name || !rec.mealType || !rec.grams) return { ok: false, summary: '写入失败：食物不存在' }
+  return {
+    ok: true,
+    summary: `已记录到今日饮食：${rec.mealType} ${rec.name} ${rec.grams}${rec.unit === '100ml' ? 'ml' : 'g'}`
+  }
 }

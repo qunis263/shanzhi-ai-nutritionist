@@ -11,6 +11,61 @@
  * 前端只与本地代理 /api/recognize 通信。
  */
 
+import type {
+  AIError,
+  AIMeta,
+  AIResponse,
+  AISource,
+  ChatPayload,
+  ChatResponseData,
+  RecognitionModelResult,
+  RecognitionPayload,
+  ToolCall
+} from '@/types'
+
+interface RequestOptions {
+  signal?: AbortSignal
+}
+
+interface StreamOptions extends RequestOptions {
+  onDelta?: (text: string) => void
+}
+
+interface HealthData {
+  mode: 'cloud' | 'mock'
+  model: string
+  chatModel: string
+  apiKeyReady: boolean
+  notice: string
+  [key: string]: unknown
+}
+
+interface ServerEnvelope<T> {
+  ok?: boolean
+  data?: T
+  source?: AISource
+  meta?: AIMeta
+  notice?: string
+  error?: Partial<AIError>
+}
+
+interface SSEFrame extends ServerEnvelope<Partial<ChatResponseData>> {
+  delta?: string
+  done?: boolean
+}
+
+function asEnvelope<T>(value: unknown): ServerEnvelope<T> {
+  return value && typeof value === 'object' ? (value as ServerEnvelope<T>) : {}
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || '')
+}
+
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : ''
+}
+
 /* ===================================================================
  * 一、配置
  * =================================================================== */
@@ -33,7 +88,7 @@ export function aiTimeout() {
 /* ===================================================================
  * 二、错误码 → 中文提示（前端侧兜底，服务端已映射过一轮）
  * =================================================================== */
-const FRONTEND_ERROR_MAP = {
+const FRONTEND_ERROR_MAP: Record<string, string> = {
   HTTP_400: '请求参数有误，请检查图片格式或补充识别线索后重试',
   HTTP_401: '鉴权失败：服务端 API Key 缺失或无效，请检查 .env 配置',
   HTTP_403: '权限不足：API Key 未开通该模型权限或已过期',
@@ -46,10 +101,10 @@ const FRONTEND_ERROR_MAP = {
 }
 
 /** 把错误对象翻译成面向用户的中文提示 */
-export function describeError(error) {
+export function describeError(error?: Partial<AIError> | null): string {
   if (!error) return '未知错误'
   if (error.message) return error.message
-  return FRONTEND_ERROR_MAP[error.code] || '识别服务暂时不可用，已切换到本地引擎'
+  return FRONTEND_ERROR_MAP[error.code || ''] || '识别服务暂时不可用，已切换到本地引擎'
 }
 
 /* ===================================================================
@@ -62,7 +117,12 @@ export function describeError(error) {
  * @param {{signal?: AbortSignal}} [options]
  * @returns {Promise<{ok: boolean, data?: object, source?: string, meta?: object, error?: object, elapsedMs: number}>}
  */
-async function request(path, payload, options = {}, method = 'POST') {
+async function request<T>(
+  path: string,
+  payload: unknown,
+  options: RequestOptions = {},
+  method: 'GET' | 'POST' = 'POST'
+): Promise<AIResponse<T>> {
   const url = `${aiEndpoint()}${path}`
   const controller = new AbortController()
   const timeout = aiTimeout()
@@ -85,11 +145,11 @@ async function request(path, payload, options = {}, method = 'POST') {
     })
 
     const text = await res.text()
-    let body = null
+    let body: ServerEnvelope<T> = {}
     try {
-      body = text ? JSON.parse(text) : null
+      body = text ? asEnvelope<T>(JSON.parse(text) as unknown) : {}
     } catch {
-      body = null
+      body = {}
     }
 
     if (!res.ok || !body?.ok) {
@@ -107,13 +167,13 @@ async function request(path, payload, options = {}, method = 'POST') {
     }
 
     return { ok: true, data: body.data, source: body.source, meta: body.meta, elapsedMs: Date.now() - startedAt }
-  } catch (err) {
-    const isAbort = err?.name === 'AbortError'
+  } catch (err: unknown) {
+    const isAbort = errorName(err) === 'AbortError'
     const isOuterAbort = Boolean(options.signal?.aborted)
     const code = isAbort ? (isOuterAbort ? 'ABORT' : 'TIMEOUT') : 'NETWORK'
     return {
       ok: false,
-      error: { code, status: null, message: FRONTEND_ERROR_MAP[code], detail: err?.message || '' },
+      error: { code, status: null, message: FRONTEND_ERROR_MAP[code], detail: errorMessage(err) },
       elapsedMs: Date.now() - startedAt
     }
   } finally {
@@ -127,16 +187,19 @@ async function request(path, payload, options = {}, method = 'POST') {
  * @param {{image: string, hint: string, clues: string[]}} payload 已标准化的请求参数
  * @param {{signal?: AbortSignal}} [options]
  */
-export function requestRecognition(payload, options) {
-  return request('/recognize', payload, options)
+export function requestRecognition(
+  payload: RecognitionPayload,
+  options?: RequestOptions
+): Promise<AIResponse<RecognitionModelResult>> {
+  return request<RecognitionModelResult>('/recognize', payload, options)
 }
 
 /**
  * 健康检查：返回代理服务当前模式（cloud / mock）、模型名、密钥是否就绪
  * 失败时返回 { ok: false }，调用方据此决定是否提示「请先启动代理服务」
  */
-export function checkHealth(options) {
-  return request('/health', null, options, 'GET')
+export function checkHealth(options?: RequestOptions): Promise<AIResponse<HealthData>> {
+  return request<HealthData>('/health', null, options, 'GET')
 }
 
 /* ===================================================================
@@ -153,8 +216,8 @@ export function checkHealth(options) {
  * @param {{messages: object[]}} payload
  * @param {{signal?: AbortSignal}} [options]
  */
-export function requestChat(payload, options) {
-  return request('/chat', { ...payload, stream: false }, options)
+export function requestChat(payload: ChatPayload, options?: RequestOptions): Promise<AIResponse<ChatResponseData>> {
+  return request<ChatResponseData>('/chat', { ...payload, stream: false }, options)
 }
 
 /**
@@ -170,14 +233,17 @@ export function requestChat(payload, options) {
  * @param {{messages: object[]}} payload
  * @param {{signal?: AbortSignal, onDelta?: (text: string) => void}} [options]
  */
-export async function requestChatStream(payload, options = {}) {
+export async function requestChatStream(
+  payload: ChatPayload,
+  options: StreamOptions = {}
+): Promise<AIResponse<ChatResponseData>> {
   const url = `${aiEndpoint()}/chat`
   const controller = new AbortController()
   // 空闲超时（而非整体超时）：每收到一个数据块就重新计时。
   // Agent 工具调用会分多轮请求，单轮思考时间可能较长；
   // 用整体超时会把「模型正在思考/推理」误判为超时并中断，
   // 因此只要求连接持续有数据在流动即可。
-  let timer = null
+  let timer: ReturnType<typeof setTimeout> | null = null
   const armTimer = () => {
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => controller.abort(), aiTimeout())
@@ -190,26 +256,26 @@ export async function requestChatStream(payload, options = {}) {
   const onDelta = typeof options.onDelta === 'function' ? options.onDelta : () => {}
   const startedAt = Date.now()
   let reply = ''
-  let source = 'cloud'
-  let meta = {}
-  let doneError = null
+  let source: AISource = 'cloud'
+  let meta: AIMeta = {}
+  let doneError: AIError | null = null
   /** AI Agent：模型本轮请求调用的工具（由服务端在 done 帧回传） */
-  let toolCalls = []
+  let toolCalls: ToolCall[] = []
   /** 服务端附加提示（如模型不支持工具调用时的自动降级） */
   let notice = ''
 
   /** 解析并消费 SSE 缓冲区，返回尚未成帧的剩余文本 */
-  const consumeFrames = (text) => {
+  const consumeFrames = (text: string): string => {
     const frames = String(text).replace(/\r\n/g, '\n').split('\n\n')
     const rest = frames.pop() ?? ''
-    frames.forEach((frame) => {
-      frame.split('\n').forEach((line) => {
+    frames.forEach(frame => {
+      frame.split('\n').forEach(line => {
         if (!line.startsWith('data:')) return
         const chunk = line.slice(5).trim()
         if (!chunk) return
-        let json = null
+        let json: SSEFrame
         try {
-          json = JSON.parse(chunk)
+          json = asEnvelope<Partial<ChatResponseData>>(JSON.parse(chunk) as unknown) as SSEFrame
         } catch {
           return
         }
@@ -224,8 +290,15 @@ export async function requestChatStream(payload, options = {}) {
           // 完整文本以服务端的收尾帧为准，避免增量拼接误差
           if (typeof json.data?.reply === 'string' && json.data.reply) reply = json.data.reply
           // Agent：本轮模型请求调用的工具（前端负责执行）
-          if (Array.isArray(json.data?.toolCalls)) toolCalls = json.data.toolCalls
-          if (json.ok === false && json.error) doneError = json.error
+          if (Array.isArray(json.data?.toolCalls)) toolCalls = json.data.toolCalls as ToolCall[]
+          if (json.ok === false && json.error) {
+            doneError = {
+              code: json.error.code || 'MODEL_ERROR',
+              status: json.error.status,
+              message: json.error.message || '模型返回错误',
+              detail: json.error.detail
+            }
+          }
         }
       })
     })
@@ -246,11 +319,11 @@ export async function requestChatStream(payload, options = {}) {
     /* ---- 非 SSE 返回：按普通 JSON 处理（兼容不支持流式的服务端） ---- */
     if (!res.ok || !isStream) {
       const text = await res.text().catch(() => '')
-      let body = null
+      let body: ServerEnvelope<ChatResponseData> = {}
       try {
-        body = text ? JSON.parse(text) : null
+        body = text ? asEnvelope<ChatResponseData>(JSON.parse(text) as unknown) : {}
       } catch {
-        body = null
+        body = {}
       }
       if (res.ok && body?.ok) {
         const full = body.data?.reply || ''
@@ -270,7 +343,8 @@ export async function requestChatStream(payload, options = {}) {
         error: {
           code: serverError?.code || `HTTP_${res.status}`,
           status: res.status,
-          message: serverError?.message || FRONTEND_ERROR_MAP[`HTTP_${res.status}`] || `对话请求失败（HTTP ${res.status}）`,
+          message:
+            serverError?.message || FRONTEND_ERROR_MAP[`HTTP_${res.status}`] || `对话请求失败（HTTP ${res.status}）`,
           detail: serverError?.detail || ''
         },
         elapsedMs: Date.now() - startedAt
@@ -281,7 +355,12 @@ export async function requestChatStream(payload, options = {}) {
     if (!res.body || typeof res.body.getReader !== 'function') {
       return {
         ok: false,
-        error: { code: 'NO_STREAM_SUPPORT', status: null, message: '当前浏览器不支持流式读取，已切换为一次性返回', detail: '' },
+        error: {
+          code: 'NO_STREAM_SUPPORT',
+          status: null,
+          message: '当前浏览器不支持流式读取，已切换为一次性返回',
+          detail: ''
+        },
         elapsedMs: Date.now() - startedAt
       }
     }
@@ -311,8 +390,8 @@ export async function requestChatStream(payload, options = {}) {
       notice,
       elapsedMs: Date.now() - startedAt
     }
-  } catch (err) {
-    const isAbort = err?.name === 'AbortError'
+  } catch (err: unknown) {
+    const isAbort = errorName(err) === 'AbortError'
     const isOuterAbort = Boolean(options.signal?.aborted)
     const code = isAbort ? (isOuterAbort ? 'ABORT' : 'TIMEOUT') : 'NETWORK'
 
@@ -326,17 +405,17 @@ export async function requestChatStream(payload, options = {}) {
         mode: 'stream',
         truncated: true,
         notice,
-        error: { code, status: null, message: FRONTEND_ERROR_MAP[code], detail: err?.message || '' },
+        error: { code, status: null, message: FRONTEND_ERROR_MAP[code], detail: errorMessage(err) },
         elapsedMs: Date.now() - startedAt
       }
     }
     return {
       ok: false,
-      error: { code, status: null, message: FRONTEND_ERROR_MAP[code], detail: err?.message || '' },
+      error: { code, status: null, message: FRONTEND_ERROR_MAP[code], detail: errorMessage(err) },
       elapsedMs: Date.now() - startedAt
     }
   } finally {
-    clearTimeout(timer)
+    if (timer) clearTimeout(timer)
     if (options.signal) options.signal.removeEventListener('abort', onOuterAbort)
   }
 }

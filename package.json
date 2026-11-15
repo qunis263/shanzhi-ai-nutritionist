@@ -10,20 +10,27 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "check": "npm run lint && npm run typecheck && npm run build && npm run ai:verify",
     "preview": "vite preview",
     "ai:server": "node server/index.js",
     "ai:verify": "node server/index.js --self-test",
-    "lint": "eslint src server --ext .js,.vue",
-    "lint:fix": "eslint src server --ext .js,.vue --fix",
-    "format": "prettier --write \"src/**/*.{js,vue,css}\" \"server/**/*.js\""
+    "ai:evaluate": "node scripts/run-ai-evaluation.js",
+    "lint": "eslint src server --ext .js,.ts,.vue",
+    "lint:fix": "eslint src server --ext .js,.ts,.vue --fix",
+    "format": "prettier --write \"src/**/*.{js,ts,vue,css}\" \"server/**/*.js\""
   },
   "dependencies": {
+    "@fontsource-variable/noto-sans-sc": "^5.3.1",
     "echarts": "^5.5.1",
     "pinia": "^2.2.8",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@typescript-eslint/eslint-plugin": "^8.72.2",
+    "@typescript-eslint/parser": "^8.72.2",
     "@vitejs/plugin-vue": "^5.2.1",
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
@@ -32,6 +39,8 @@
     "postcss": "^8.4.49",
     "prettier": "^3.9.10",
     "tailwindcss": "^3.4.17",
-    "vite": "^6.0.7"
+    "typescript": "^6.0.3",
+    "vite": "^6.0.7",
+    "vue-tsc": "^3.3.14"
   }
 }

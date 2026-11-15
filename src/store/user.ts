@@ -10,9 +10,10 @@ import { defineStore } from 'pinia'
 import { computed, reactive, watch } from 'vue'
 import { computeMetrics, getActivity } from '../utils/nutrition'
 import { readJSON, writeJSON, removeKey, STORAGE_KEYS } from '../utils/storage'
+import type { UserProfile } from '@/types'
 
 /** 默认档案（首次进入应用时的演示数据，保证一打开就有内容可看） */
-const DEFAULT_PROFILE = {
+const DEFAULT_PROFILE: UserProfile = {
   nickname: '小营养家',
   avatar: '🧑‍🍳',
   gender: 'male', // male 男 / female 女
@@ -25,7 +26,8 @@ const DEFAULT_PROFILE = {
 
 export const useUserStore = defineStore('user', () => {
   // ---- 状态：个人健康档案 ----
-  const profile = reactive({ ...readJSON(STORAGE_KEYS.profile, DEFAULT_PROFILE) })
+  const storedProfile = readJSON(STORAGE_KEYS.profile, DEFAULT_PROFILE) as UserProfile
+  const profile = reactive<UserProfile>({ ...DEFAULT_PROFILE, ...storedProfile })
 
   // ---- 计算属性：由档案实时推导的身体指标 ----
   /** 是否已完成测评（有身高体重即为已完成） */
@@ -45,7 +47,7 @@ export const useUserStore = defineStore('user', () => {
    * 更新档案（支持部分字段）
    * @param {object} patch 需要更新的字段
    */
-  function updateProfile(patch = {}) {
+  function updateProfile(patch: Partial<UserProfile> = {}) {
     Object.assign(profile, patch)
   }
 
@@ -63,7 +65,7 @@ export const useUserStore = defineStore('user', () => {
   // ---- 持久化：档案变化时自动写入 localStorage ----
   watch(
     profile,
-    (val) => {
+    val => {
       writeJSON(STORAGE_KEYS.profile, val)
     },
     { deep: true }

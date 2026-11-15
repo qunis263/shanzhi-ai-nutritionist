@@ -9,7 +9,9 @@
 export const STORAGE_KEYS = {
   profile: 'ai_nutrition_profile_v1', // 个人健康档案
   diet: 'ai_nutrition_diet_v1', // 饮食记录 / 饮水 / 历史
-  chat: 'ai_nutrition_chat_v1' // AI 对话历史（仅最近若干条，供刷新后恢复）
+  chat: 'ai_nutrition_chat_v1', // AI 对话历史（仅最近若干条，供刷新后恢复）
+  interventions: 'ai_nutrition_interventions_v1', // 7 天微干预实验与真实打卡
+  pilot: 'ai_nutrition_pilot_v1' // 匿名试点、问卷与产品行为事件
 }
 
 /**

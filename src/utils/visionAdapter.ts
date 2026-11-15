@@ -12,6 +12,24 @@
  */
 import { searchFood, FOOD_DB, FOOD_MAP } from '@/data/foods'
 import { extractTextClues } from '@/utils/recognition'
+import type {
+  AIMeta,
+  AISource,
+  FoodItem,
+  LocalRecognitionResult,
+  RecognitionCandidate,
+  RecognitionModelResult,
+  RecognitionPayload,
+  RecognitionResult
+} from '@/types'
+
+type ResolveMode = 'empty' | 'exact' | 'contains' | 'keyword' | 'fuzzy' | 'unmatched'
+
+interface RecognitionContext {
+  source?: AISource
+  meta?: AIMeta
+  local?: LocalRecognitionResult | null
+}
 
 /* ===================================================================
  * 一、请求参数标准化转换
@@ -23,7 +41,7 @@ import { extractTextClues } from '@/utils/recognition'
  * @param {string} fileName 文件名 / 示例关键词
  * @param {string} hint 用户补充线索
  */
-export function buildRequestPayload(image, fileName = '', hint = '') {
+export function buildRequestPayload(image: string, fileName = '', hint = ''): RecognitionPayload {
   // 复用识别引擎的线索抽取规则，保证「文件名 → 关键词」的口径与本地引擎一致
   const clues = [...new Set([...extractTextClues(fileName), ...extractTextClues(hint)])].slice(0, 8)
   return {
@@ -42,8 +60,8 @@ export function buildRequestPayload(image, fileName = '', hint = '') {
  * @param {object} data 代理返回的 data 字段
  * @returns {{food: string, confidence: number, reason: string, alternatives: string[]}}
  */
-export function parseModelResponse(data) {
-  const raw = data && typeof data === 'object' ? data : {}
+export function parseModelResponse(data: unknown): RecognitionModelResult {
+  const raw = data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
   const food = String(raw.food ?? '').trim()
   let confidence = Number(raw.confidence)
   if (!Number.isFinite(confidence)) confidence = 0
@@ -52,7 +70,10 @@ export function parseModelResponse(data) {
   confidence = Math.max(0, Math.min(1, confidence))
 
   const alternatives = Array.isArray(raw.alternatives)
-    ? raw.alternatives.map((x) => String(x).trim()).filter(Boolean).slice(0, 3)
+    ? raw.alternatives
+        .map((x: unknown) => String(x).trim())
+        .filter(Boolean)
+        .slice(0, 3)
     : []
 
   return {
@@ -68,7 +89,7 @@ export function parseModelResponse(data) {
  * =================================================================== */
 
 /** 名称归一化：去掉空格、蒸/炒等做法前后缀噪声，便于比对 */
-function normalizeName(name) {
+function normalizeName(name: unknown): string {
   return String(name || '').replace(/[\s（）()·、,，]/g, '')
 }
 
@@ -78,24 +99,24 @@ function normalizeName(name) {
  * @param {string} name
  * @returns {{food: object|null, mode: string}}
  */
-export function resolveFood(name) {
+export function resolveFood(name: string): { food: FoodItem | null; mode: ResolveMode } {
   const target = normalizeName(name)
   if (!target) return { food: null, mode: 'empty' }
 
   // ① 完全同名
-  const exact = FOOD_DB.find((f) => normalizeName(f.name) === target)
+  const exact = FOOD_DB.find((f: FoodItem) => normalizeName(f.name) === target)
   if (exact) return { food: exact, mode: 'exact' }
 
   // ② 条目名称被模型名称包含，或反之（如模型输出「清蒸鲈鱼」↔ 库中「鲈鱼」）
-  const contained = FOOD_DB.find((f) => {
+  const contained = FOOD_DB.find((f: FoodItem) => {
     const n = normalizeName(f.name)
     return n.length >= 2 && (target.includes(n) || n.includes(target))
   })
   if (contained) return { food: contained, mode: 'contains' }
 
   // ③ 关键词 / 别名命中
-  const byKeyword = FOOD_DB.find((f) =>
-    (f.keywords || []).some((k) => {
+  const byKeyword = FOOD_DB.find((f: FoodItem) =>
+    (f.keywords || []).some((k: string) => {
       const nk = normalizeName(k)
       return nk.length >= 2 && (target === nk || target.includes(nk) || nk.includes(target))
     })
@@ -114,11 +135,15 @@ export function resolveFood(name) {
  * =================================================================== */
 
 /** 把模型给出的候选名逐条绑定到数据库，构造成页面候选排名所需的结构 */
-function buildCandidates(parsed, matchedFood, localCandidates) {
-  const list = []
-  const seen = new Set()
+function buildCandidates(
+  parsed: RecognitionModelResult,
+  matchedFood: FoodItem | null,
+  localCandidates: LocalRecognitionResult['candidates'] = []
+): RecognitionCandidate[] {
+  const list: RecognitionCandidate[] = []
+  const seen = new Set<string>()
 
-  const push = (food, score, fromModel) => {
+  const push = (food: FoodItem | null | undefined, score: number, fromModel: boolean) => {
     if (!food || seen.has(food.id)) return
     seen.add(food.id)
     list.push({ food, score: Math.max(5, Math.min(100, score)), raw: score, fromModel: Boolean(fromModel) })
@@ -128,13 +153,13 @@ function buildCandidates(parsed, matchedFood, localCandidates) {
   if (matchedFood) push(matchedFood, parsed.confidence * 100, true)
 
   // 次位：模型给出的易混淆候选，分数按置信度阶梯递减
-  parsed.alternatives.forEach((name, i) => {
+  parsed.alternatives.forEach((name: string, i: number) => {
     const { food } = resolveFood(name)
     push(food, parsed.confidence * 100 - (i + 1) * 12, true)
   })
 
   // 末位：本地引擎的视觉候选（保留可解释特征排行，作为交叉验证展示）
-  ;(localCandidates || []).forEach((c) => push(c.food, c.score, false))
+  ;(localCandidates || []).forEach((c: { food: FoodItem; score: number }) => push(c.food, c.score, false))
 
   return list.slice(0, 5)
 }
@@ -145,13 +170,16 @@ function buildCandidates(parsed, matchedFood, localCandidates) {
  * @param {object} context { source, meta, local }
  * @returns {object} 与 rankCandidates 返回结构一致的识别结果
  */
-export function toRecognitionResult(parsed, context = {}) {
+export function toRecognitionResult(
+  parsed: RecognitionModelResult,
+  context: RecognitionContext = {}
+): RecognitionResult {
   const { source = 'cloud', meta = {}, local = null } = context
   const resolved = resolveFood(parsed.food)
   const matchedFood = resolved.food
 
   // 若模型名字未能绑定数据库，退而使用本地引擎的最佳匹配，但仍明确标记未匹配
-  const found = matchedFood || (local?.found ?? FOOD_DB[0])
+  const found = matchedFood || (local?.found ?? (FOOD_DB[0] as FoodItem))
   const unmatchedName = matchedFood ? '' : parsed.food
 
   /* ---- 判定依据：先给模型依据，再补本地可解释的视觉特征 ---- */
@@ -162,12 +190,18 @@ export function toRecognitionResult(parsed, context = {}) {
     reasons.push(`☁️ 大模型判定依据：${parsed.reason || '（模型未提供说明）'}`)
   }
   if (matchedFood) {
-    reasons.push(`🗂️ 已绑定本地食物库条目「${found.name}」，营养参数取自已录入的每 100g 数据（匹配方式：${resolveModeText(resolved.mode)}）`)
+    reasons.push(
+      `🗂️ 已绑定本地食物库条目「${found.name}」，营养参数取自已录入的每 100g 数据（匹配方式：${resolveModeText(resolved.mode)}）`
+    )
   } else if (parsed.food) {
     reasons.push(`⚠️ 模型识别为「${parsed.food}」，但本地食物库暂无该条目，无法给出营养参数，请手动搜索添加`)
   }
   if (local?.features?.ok) {
-    reasons.push(...local.reasons.filter((r) => !r.startsWith('文件名无有效线索') && !r.startsWith('文件名线索')).slice(0, 2))
+    reasons.push(
+      ...local.reasons
+        .filter((r: string) => !r.startsWith('文件名无有效线索') && !r.startsWith('文件名线索'))
+        .slice(0, 2)
+    )
   }
 
   return {
@@ -187,8 +221,8 @@ export function toRecognitionResult(parsed, context = {}) {
 }
 
 /** 匹配方式的中文描述 */
-function resolveModeText(mode) {
-  const map = {
+function resolveModeText(mode: ResolveMode): string {
+  const map: Partial<Record<ResolveMode, string>> = {
     exact: '名称完全一致',
     contains: '名称包含匹配',
     keyword: '别名 / 关键词命中',
@@ -199,6 +233,6 @@ function resolveModeText(mode) {
 }
 
 /** 便捷导出：按 id 取食物（供页面或测试使用） */
-export function foodById(id) {
-  return FOOD_MAP[id] || null
+export function foodById(id: string): FoodItem | null {
+  return (FOOD_MAP[id] as FoodItem | undefined) || null
 }
