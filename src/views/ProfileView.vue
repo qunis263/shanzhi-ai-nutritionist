@@ -1,50 +1,128 @@
 <script setup>
-/**
- * ProfileView 页面组件：个人中心 & 历史记录
- * ------------------------------------------------------------------
- * 页面职责：
- *   1. 个人健康档案：可编辑表单（昵称 / 头像 / 性别 / 年龄 / 身高 / 体重 / 运动强度）+ 实时指标
- *   2. 整体数据统计：基于 dietStore.stats 的 8 个关键指标
- *   3. 一周趋势图表：热量折线（含目标线）+ 健康评分柱状
- *   4. 历史饮食记录：每天一行，展开查看该日按餐段分组的明细（今天可逐条删除）
- *   5. 历史营养报告：每天一份报告摘要，展开查看优点 / 待改进 / 超标项 / 缺口项 + 营养素对比
- *   6. 数据管理：重置为演示数据 / 清空全部数据
- * 全部数据来自 Pinia Store 与 localStorage，纯前端 mock。
- */
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
-import MacaronCard from '@/components/common/MacaronCard.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
-import StatTile from '@/components/common/StatTile.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/store/user'
 import { useDietStore } from '@/store/diet'
-import { ACTIVITY_LEVELS, evaluateNutrient, round1, sumNutrition, buildReport } from '@/utils/nutrition'
-import { macaronLineOption, macaronBarOption, MACARON } from '@/utils/charts'
+import { usePilotStore } from '@/store/pilot'
+import { ACTIVITY_LEVELS, buildReport, computeMetrics, evaluateNutrient, round1, sumNutrition } from '@/utils/nutrition'
+import { macaronBarOption, macaronLineOption, MACARON } from '@/utils/charts'
 import { themeBg, themeText } from '@/utils/theme'
-import { MEAL_TYPES, MEAL_EMOJI } from '@/data/mockHistory'
-import { formatCN, relativeDay, isToday } from '@/utils/date'
+import { MEAL_EMOJI, MEAL_TYPES } from '@/data/mockHistory'
+import { formatCN, isToday, relativeDay } from '@/utils/date'
+import { confirm } from '@/composables/useConfirm'
 
 const userStore = useUserStore()
 const dietStore = useDietStore()
+const pilotStore = usePilotStore()
 
-/* ===================================================================
- * 一、个人健康档案表单
- * =================================================================== */
-/** 可切换的头像 Emoji 列表 */
 const AVATARS = ['🧑‍🍳', '🥗', '🍎', '🏃', '💪', '🧘', '🐟', '🥦']
+const PROFILE_TABS = [
+  { key: 'overview', label: '数据概览' },
+  { key: 'trends', label: '一周趋势' },
+  { key: 'history', label: '饮食历史' },
+  { key: 'reports', label: '营养报告' }
+]
+const COMPARE_KEYS = ['calories', 'protein', 'fat', 'carb', 'fiber']
 
-/** 表单本地副本（保存时才写回 Store，避免输入过程中频繁触发全站重算） */
+const activeTab = ref('overview')
+const editorOpen = ref(false)
+const editorStep = ref(1)
+const manageOpen = ref(false)
+const expandedDay = ref('')
+const expandedReport = ref('')
 const form = reactive({ ...userStore.profile })
 
-/** 点击头像：按列表循环切换到下一个 Emoji 形象 */
-function nextAvatar() {
-  const index = AVATARS.indexOf(form.avatar)
-  form.avatar = AVATARS[(index + 1) % AVATARS.length]
+const metrics = computed(() => userStore.metrics)
+const previewMetrics = computed(() =>
+  computeMetrics({
+    ...form,
+    age: Number(form.age) || 0,
+    height: Number(form.height) || 0,
+    weight: Number(form.weight) || 0
+  })
+)
+const stats = computed(() => dietStore.stats)
+const totalWaterL = computed(() => round1(stats.value.totalWater / 1000))
+const bestDateText = computed(() => formatCN(stats.value.bestDate))
+const weekData = computed(() => dietStore.weekData)
+const historyDays = computed(() => dietStore.historyDays)
+const hasHistory = computed(() => historyDays.value.some(day => day.recordCount > 0))
+
+const overviewStats = computed(() => [
+  { label: '本周记录', value: stats.value.days, unit: '天' },
+  { label: '日均热量', value: stats.value.avgCalories, unit: 'kcal' },
+  { label: '日均健康评分', value: stats.value.avgScore, unit: '分' },
+  { label: '最高评分', value: stats.value.bestScore, unit: '分', sub: bestDateText.value },
+  { label: '平均蛋白质', value: stats.value.avgProtein, unit: 'g' },
+  { label: '平均膳食纤维', value: stats.value.avgFiber, unit: 'g' },
+  { label: '累计饮食记录', value: stats.value.totalRecords, unit: '条' },
+  { label: '累计饮水', value: totalWaterL.value, unit: 'L' }
+])
+
+const lineOption = computed(() =>
+  macaronLineOption({
+    labels: weekData.value.map(day => day.label),
+    series: [{ name: '每日热量', data: weekData.value.map(day => day.calories), color: MACARON.orange, area: true }],
+    target: dietStore.targets.calories,
+    targetLabel: '目标',
+    unit: 'kcal'
+  })
+)
+
+const barOption = computed(() =>
+  macaronBarOption({
+    labels: weekData.value.map(day => day.label),
+    values: weekData.value.map(day => day.score),
+    name: '健康评分',
+    unit: '分'
+  })
+)
+
+const expandedDetail = computed(() => {
+  if (!expandedDay.value) return null
+  const day = dietStore.getDay(expandedDay.value)
+  const groups = MEAL_TYPES.map(type => ({
+    type,
+    emoji: MEAL_EMOJI[type],
+    items: day.records.filter(record => record.mealType === type)
+  })).filter(group => group.items.length > 0)
+  return {
+    date: expandedDay.value,
+    water: day.water,
+    groups,
+    recordCount: day.records.length,
+    isToday: isToday(expandedDay.value)
+  }
+})
+
+const reportDays = computed(() =>
+  historyDays.value.map(day => {
+    const detail = dietStore.getDay(day.date)
+    const summary = sumNutrition(detail.records)
+    const report = buildReport({ summary, targets: dietStore.targets, water: detail.water, records: detail.records })
+    const compare = COMPARE_KEYS.map(key => evaluateNutrient(key, summary[key], dietStore.targets[key]))
+    return { ...day, report, compare }
+  })
+)
+
+function openEditor() {
+  Object.assign(form, userStore.profile)
+  editorStep.value = 1
+  editorOpen.value = true
+  manageOpen.value = false
 }
 
-/** 保存档案：数值字段做一次类型转换，再写回 Store（全站数据随之联动） */
+function closeEditor() {
+  editorOpen.value = false
+}
+
+function resetEditorForm() {
+  Object.assign(form, userStore.DEFAULT_PROFILE)
+}
+
 function saveProfile() {
   userStore.updateProfile({
     nickname: form.nickname || '小营养家',
@@ -55,156 +133,50 @@ function saveProfile() {
     weight: Number(form.weight) || 0,
     activity: form.activity
   })
-  showToast('档案已保存 ✅')
+  editorOpen.value = false
+  showToast('档案已保存，全站数据已更新')
 }
 
-/** 恢复默认档案并同步到表单 */
-function resetProfile() {
-  userStore.resetProfile()
-  Object.assign(form, userStore.profile)
-  showToast('已恢复默认档案 ↩️')
-}
-
-/** 身体指标（BMI / BMR / TDEE / 推荐热量 / 饮食模式），由档案实时推导 */
-const metrics = computed(() => userStore.metrics)
-
-/* ===================================================================
- * 二、整体数据统计
- * =================================================================== */
-const stats = computed(() => dietStore.stats)
-
-/** 累计饮水由 ml 换算为 L，展示更直观 */
-const totalWaterL = computed(() => round1(stats.value.totalWater / 1000))
-
-/** 最高评分对应的日期（中文格式） */
-const bestDateText = computed(() => formatCN(stats.value.bestDate))
-
-/* ===================================================================
- * 三、一周趋势图表
- * =================================================================== */
-const weekData = computed(() => dietStore.weekData)
-
-/** 近 7 天热量折线（含每日目标热量参考线） */
-const lineOption = computed(() =>
-  macaronLineOption({
-    labels: weekData.value.map((day) => day.label),
-    series: [{ name: '每日热量', data: weekData.value.map((day) => day.calories), color: MACARON.orange, area: true }],
-    target: dietStore.targets.calories,
-    targetLabel: '目标',
-    unit: 'kcal'
-  })
-)
-
-/** 近 7 天健康评分柱状图 */
-const barOption = computed(() =>
-  macaronBarOption({
-    labels: weekData.value.map((day) => day.label),
-    values: weekData.value.map((day) => day.score),
-    name: '健康评分',
-    unit: '分'
-  })
-)
-
-/* ===================================================================
- * 四、历史饮食记录（每天的记录明细）
- * =================================================================== */
-const historyDays = computed(() => dietStore.historyDays)
-
-/** 是否存在任意一天的饮食记录（用于空数据兜底：清空全部数据后展示 EmptyState） */
-const hasHistory = computed(() => historyDays.value.some((day) => day.recordCount > 0))
-
-const expandedDay = ref('') // 当前展开的日期（'' 表示全部收起）
-
-/** 点击行：展开 / 收起该日明细 */
 function toggleDay(date) {
   expandedDay.value = expandedDay.value === date ? '' : date
 }
 
-/**
- * 展开日的明细：按餐段（MEAL_TYPES）分组，并标记是否为今天（今天可逐条删除）
- */
-const expandedDetail = computed(() => {
-  if (!expandedDay.value) return null
-  const day = dietStore.getDay(expandedDay.value)
-  const groups = MEAL_TYPES.map((type) => ({
-    type,
-    emoji: MEAL_EMOJI[type],
-    items: day.records.filter((record) => record.mealType === type)
-  })).filter((group) => group.items.length > 0)
-  return {
-    date: expandedDay.value,
-    water: day.water,
-    groups,
-    recordCount: day.records.length,
-    isToday: isToday(expandedDay.value)
-  }
-})
-
-/** 删除今日某条记录（仅今天可用） */
-function removeRecord(id) {
-  dietStore.removeRecord(id)
-  showToast('已删除该条记录 🗑️')
-}
-
-/* ===================================================================
- * 五、历史营养报告
- * =================================================================== */
-const expandedReport = ref('') // 当前展开的报告日期
-
-/** 点击：展开 / 收起某天的报告详情 */
 function toggleReport(date) {
   expandedReport.value = expandedReport.value === date ? '' : date
 }
 
-/** 报告对比中展示的营养素 */
-const COMPARE_KEYS = ['calories', 'protein', 'fat', 'carb', 'fiber']
-
-/**
- * 近 7 天报告摘要：逐日取记录 → 累加营养 → 复用 buildReport 生成完整报告，
- * 同时给出热量 / 蛋白质 / 脂肪 / 碳水 / 纤维 的实际值与目标值对比。
- */
-const reportDays = computed(() =>
-  historyDays.value.map((day) => {
-    const detail = dietStore.getDay(day.date)
-    const summary = sumNutrition(detail.records)
-    const report = buildReport({
-      summary,
-      targets: dietStore.targets,
-      water: detail.water,
-      records: detail.records
-    })
-    const compare = COMPARE_KEYS.map((key) => evaluateNutrient(key, summary[key], dietStore.targets[key]))
-    return { ...day, report, compare }
-  })
-)
-
-/* ===================================================================
- * 六、数据管理
- * =================================================================== */
-/** 重置为演示数据 */
-function resetDemo() {
-  dietStore.resetToDemo()
-  expandedDay.value = ''
-  showToast('已重置为演示数据 🔄')
+function removeRecord(id) {
+  dietStore.removeRecord(id)
+  showToast('已删除该条记录')
 }
 
-/** 清空全部数据（二次确认） */
-function clearAllData() {
-  const ok = window.confirm('确定要清空全部饮食记录与饮水数据吗？此操作不可恢复。')
+/** 一键填充演示数据：恢复演示档案 + 近 7 天饮食记录与饮水，适合答辩演示前快速就绪 */
+function fillDemoData() {
+  userStore.resetProfile()
+  dietStore.resetToDemo()
+  Object.assign(form, userStore.profile)
+  expandedDay.value = ''
+  manageOpen.value = false
+  showToast('已填充演示档案与近 7 天饮食数据')
+}
+
+async function clearAllData() {
+  const ok = await confirm({
+    title: '清空全部饮食数据？',
+    message: '将删除本机保存的全部饮食记录与饮水数据，此操作不可恢复。',
+    confirmText: '清空数据'
+  })
   if (!ok) return
   dietStore.clearAll()
   expandedDay.value = ''
-  showToast('已清空全部数据 🗑️')
+  manageOpen.value = false
+  showToast('已清空全部饮食数据')
 }
 
-/* ===================================================================
- * 七、Toast 轻提示
- * =================================================================== */
 const toastVisible = ref(false)
 const toastText = ref('')
 let toastTimer = null
 
-/** 显示 Toast，2 秒后自动隐藏 */
 function showToast(text) {
   toastText.value = text
   toastVisible.value = true
@@ -214,330 +186,962 @@ function showToast(text) {
   }, 2000)
 }
 
-// 组件卸载时清理定时器，避免内存泄漏
-onBeforeUnmount(() => {
-  clearTimeout(toastTimer)
-})
+onBeforeUnmount(() => clearTimeout(toastTimer))
 </script>
 
 <template>
-  <div>
-    <!-- ===================== 页面标题 ===================== -->
+  <div class="profile-page stagger">
     <PageHeader>
-      <template #extra>
-        <RouterLink to="/dashboard" class="btn btn-primary">📊 数据大屏</RouterLink>
-      </template>
+      <template #extra><RouterLink to="/dashboard" class="btn btn-primary">数据大屏</RouterLink></template>
     </PageHeader>
 
-    <div class="stagger flex flex-col gap-5">
-      <!-- ===================== 1. 个人健康档案 + 身体指标 ===================== -->
-      <div class="grid grid-cols-2 gap-5">
-        <!-- 左栏：可编辑档案表单 -->
-        <MacaronCard theme="purple" emoji="🧑" title="个人健康档案" sub="修改后全站数据实时联动">
-          <!-- 头像 + 昵称 -->
-          <div class="flex items-center gap-4">
-            <button class="emoji-badge-lg text-[36px]" title="点击切换头像" @click="nextAvatar">
-              {{ form.avatar }}
+    <main class="profile-shell">
+      <section class="profile-hero">
+        <div class="identity-block">
+          <span class="profile-avatar" aria-hidden="true">{{ userStore.profile.avatar }}</span>
+          <div>
+            <p class="section-eyebrow">个人健康档案</p>
+            <h1>{{ userStore.profile.nickname }}</h1>
+            <p>
+              {{ userStore.genderText }} · {{ userStore.profile.age }} 岁 · {{ userStore.profile.height }}cm ·
+              {{ userStore.profile.weight }}kg · {{ userStore.activityInfo.label }}
+            </p>
+          </div>
+        </div>
+        <div class="profile-actions">
+          <RouterLink class="btn btn-ghost" to="/pilot">
+            {{ pilotStore.currentParticipant ? '我的试点' : '加入试点' }}
+          </RouterLink>
+          <button class="btn btn-primary" type="button" @click="openEditor">编辑档案</button>
+          <div class="manage-menu-wrap">
+            <button class="icon-menu" type="button" aria-label="打开数据管理菜单" @click="manageOpen = !manageOpen">
+              •••
             </button>
-            <div class="min-w-0">
-              <p class="truncate text-[15px] font-bold tx-main">{{ form.nickname || '未命名' }}</p>
-              <p class="mt-0.5 text-[12px] tx-muted">点击左侧头像可切换 Emoji 形象 🎨</p>
+            <div v-if="manageOpen" class="manage-menu">
+              <strong>本机数据管理</strong>
+              <p>饮食记录仅保存在当前浏览器。</p>
+              <button type="button" @click="fillDemoData">一键填充演示数据</button>
+              <button class="danger" type="button" @click="clearAllData">清空全部饮食数据</button>
             </div>
           </div>
+        </div>
+      </section>
 
-          <div class="divider"></div>
+      <section class="metric-strip" aria-label="当前身体指标">
+        <div class="bmi-metric">
+          <span>BMI</span><strong class="num" :style="{ color: metrics.bmiGrade.color }">{{ metrics.bmi }}</strong
+          ><em :style="{ color: metrics.bmiGrade.color }">{{ metrics.bmiGrade.label }}</em>
+        </div>
+        <div>
+          <span>基础代谢 BMR</span><strong class="num">{{ metrics.bmr }} <small>kcal</small></strong>
+        </div>
+        <div>
+          <span>每日消耗 TDEE</span><strong class="num">{{ metrics.tdee }} <small>kcal</small></strong>
+        </div>
+        <div>
+          <span>推荐摄入</span><strong class="num">{{ metrics.dailyCalories }} <small>kcal</small></strong>
+        </div>
+        <div>
+          <span>饮食模式</span><strong>{{ metrics.dietModeEmoji }} {{ metrics.dietMode }}</strong>
+        </div>
+      </section>
 
-          <!-- 基础字段 -->
-          <div class="grid grid-cols-2 gap-4">
-            <div class="col-span-2">
-              <label class="field-label">昵称</label>
-              <input v-model="form.nickname" class="field" placeholder="给自己起个名字" />
-            </div>
-            <div class="col-span-2">
-              <label class="field-label">性别</label>
-              <div class="seg">
-                <button class="seg-item" :class="{ 'is-active': form.gender === 'male' }" @click="form.gender = 'male'">👦 男</button>
-                <button class="seg-item" :class="{ 'is-active': form.gender === 'female' }" @click="form.gender = 'female'">👧 女</button>
-              </div>
-            </div>
+      <nav class="profile-tabs" aria-label="个人数据视图">
+        <button
+          v-for="tab in PROFILE_TABS"
+          :key="tab.key"
+          type="button"
+          :class="{ active: activeTab === tab.key }"
+          @click="activeTab = tab.key"
+        >
+          {{ tab.label }}
+        </button>
+      </nav>
+
+      <Transition name="view-fade" mode="out-in">
+        <section v-if="activeTab === 'overview'" key="overview" class="view-section overview-view">
+          <header class="view-head">
             <div>
-              <label class="field-label">年龄（岁）</label>
-              <input v-model.number="form.age" type="number" class="field" min="10" max="90" />
+              <p class="section-eyebrow">最近 7 天</p>
+              <h2>健康数据概览</h2>
             </div>
-            <div>
-              <label class="field-label">身高（cm）</label>
-              <input v-model.number="form.height" type="number" class="field" min="120" max="230" />
-            </div>
-            <div>
-              <label class="field-label">体重（kg）</label>
-              <input v-model.number="form.weight" type="number" class="field" min="30" max="200" step="0.1" />
+            <p>{{ metrics.bmiGrade.advice }}</p>
+          </header>
+          <div class="overview-grid">
+            <div v-for="item in overviewStats" :key="item.label" class="overview-stat">
+              <span>{{ item.label }}</span
+              ><strong class="num"
+                >{{ item.value }} <small>{{ item.unit }}</small></strong
+              ><em v-if="item.sub">{{ item.sub }}</em>
             </div>
           </div>
+          <div class="overview-note">
+            <strong>当前建议</strong>
+            <p>{{ metrics.dietModeDesc }}</p>
+            <RouterLink to="/report">查看今日营养分析 →</RouterLink>
+          </div>
+        </section>
 
-          <!-- 运动强度（4 个可点卡片） -->
-          <label class="field-label mt-4">运动强度</label>
-          <div class="grid grid-cols-2 gap-3">
+        <section v-else-if="activeTab === 'trends'" key="trends" class="view-section">
+          <header class="view-head">
+            <div>
+              <p class="section-eyebrow">趋势视图</p>
+              <h2>近 7 天变化</h2>
+            </div>
+            <p>热量目标 {{ dietStore.targets.calories }} kcal</p>
+          </header>
+          <div class="trend-grid">
+            <div>
+              <h3>每日热量</h3>
+              <BaseChart :option="lineOption" height="340px" />
+            </div>
+            <div>
+              <h3>健康评分</h3>
+              <BaseChart :option="barOption" height="340px" />
+            </div>
+          </div>
+        </section>
+
+        <section v-else-if="activeTab === 'history'" key="history" class="view-section">
+          <header class="view-head">
+            <div>
+              <p class="section-eyebrow">时间轴</p>
+              <h2>最近饮食记录</h2>
+            </div>
+            <RouterLink to="/diet">记录今天的饮食 →</RouterLink>
+          </header>
+          <div v-if="hasHistory" class="history-list">
+            <article
+              v-for="day in historyDays"
+              :key="day.date"
+              class="history-day"
+              :class="{ expanded: expandedDay === day.date }"
+            >
+              <button class="history-summary" type="button" @click="toggleDay(day.date)">
+                <span class="history-date"
+                  ><strong>{{ formatCN(day.date) }}</strong
+                  ><small>{{ relativeDay(day.date) }} · {{ day.weekday }}</small></span
+                >
+                <span
+                  ><small>热量</small><strong class="num">{{ day.calories }} kcal</strong></span
+                >
+                <span
+                  ><small>健康评分</small
+                  ><strong class="num" :style="{ color: day.grade.color }">{{ day.score }}</strong></span
+                >
+                <span
+                  ><small>记录</small><strong class="num">{{ day.recordCount }} 条</strong></span
+                >
+                <span
+                  ><small>饮水</small><strong class="num">{{ day.water }} ml</strong></span
+                >
+                <em>{{ expandedDay === day.date ? '收起' : '展开' }}</em>
+              </button>
+              <Transition name="view-fade">
+                <div v-if="expandedDay === day.date && expandedDetail" class="history-detail">
+                  <div v-for="group in expandedDetail.groups" :key="group.type" class="meal-group">
+                    <h3>{{ group.emoji }} {{ group.type }}</h3>
+                    <div v-for="record in group.items" :key="record.id" class="record-line">
+                      <span>{{ record.emoji }} {{ record.name }}</span
+                      ><small>{{ record.grams }}{{ record.unit === '100ml' ? 'ml' : 'g' }}</small
+                      ><strong class="num">{{ record.nutrition.calories }} kcal</strong>
+                      <button
+                        v-if="expandedDetail.isToday"
+                        type="button"
+                        aria-label="删除记录"
+                        @click.stop="removeRecord(record.id)"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                  <EmptyState v-if="!expandedDetail.groups.length" emoji="🍽️" text="当日没有饮食记录" height="100px" />
+                </div>
+              </Transition>
+            </article>
+          </div>
+          <EmptyState v-else emoji="📭" text="暂无历史记录" sub="记录第一餐后，这里会形成你的健康时间轴" />
+        </section>
+
+        <section v-else key="reports" class="view-section">
+          <header class="view-head">
+            <div>
+              <p class="section-eyebrow">AI 报告档案</p>
+              <h2>每日营养报告</h2>
+            </div>
+            <RouterLink to="/report">查看今日完整报告 →</RouterLink>
+          </header>
+          <div v-if="hasHistory" class="report-list">
+            <article v-for="day in reportDays" :key="day.date" class="report-day">
+              <button class="report-summary" type="button" @click="toggleReport(day.date)">
+                <span
+                  ><strong>{{ formatCN(day.date) }}</strong
+                  ><small>{{ relativeDay(day.date) }} · {{ day.weekday }}</small></span
+                >
+                <b class="num" :style="{ color: day.report.grade.color }">{{ day.report.score }}</b>
+                <i
+                  :style="{
+                    backgroundColor: themeBg(day.report.grade.theme),
+                    color: themeText(day.report.grade.theme)
+                  }"
+                  >{{ day.report.grade.emoji }} {{ day.report.grade.label }}</i
+                >
+                <p>{{ day.report.grade.desc }}</p>
+                <em>{{ expandedReport === day.date ? '收起' : '展开' }}</em>
+              </button>
+              <Transition name="view-fade">
+                <div v-if="expandedReport === day.date" class="report-detail">
+                  <div class="report-findings">
+                    <section>
+                      <h3>表现良好</h3>
+                      <p v-for="item in day.report.strengths" :key="item">{{ item }}</p>
+                    </section>
+                    <section>
+                      <h3>需要关注</h3>
+                      <p v-for="item in day.report.weaknesses" :key="item">{{ item }}</p>
+                    </section>
+                  </div>
+                  <div class="compare-lines">
+                    <div v-for="item in day.compare" :key="item.key">
+                      <span>{{ item.emoji }} {{ item.label }}</span
+                      ><strong class="num">{{ item.value }} / {{ item.target }} {{ item.unit }}</strong
+                      ><StatusBadge :status="item.status" size="sm" />
+                    </div>
+                  </div>
+                </div>
+              </Transition>
+            </article>
+          </div>
+          <EmptyState v-else emoji="📋" text="暂无历史报告" sub="记录饮食后即可生成 AI 报告" />
+        </section>
+      </Transition>
+    </main>
+
+    <Transition name="drawer-fade"
+      ><div v-if="editorOpen" class="drawer-backdrop" @click="closeEditor"></div
+    ></Transition>
+    <Transition name="drawer-slide">
+      <aside v-if="editorOpen" class="profile-drawer" aria-label="编辑健康档案">
+        <header class="drawer-head">
+          <div>
+            <p class="section-eyebrow">编辑健康档案</p>
+            <h2>{{ editorStep === 1 ? '基础资料' : editorStep === 2 ? '身体数据' : '活动状态' }}</h2>
+          </div>
+          <button type="button" @click="closeEditor">关闭</button>
+        </header>
+        <nav class="editor-steps">
+          <button
+            v-for="step in 3"
+            :key="step"
+            type="button"
+            :class="{ active: editorStep === step }"
+            @click="editorStep = step"
+          >
+            <span>0{{ step }}</span
+            >{{ ['基础资料', '身体数据', '活动状态'][step - 1] }}
+          </button>
+        </nav>
+        <div class="drawer-scroll">
+          <section v-if="editorStep === 1" class="editor-panel">
+            <label>选择形象</label>
+            <div class="avatar-options">
+              <button
+                v-for="avatar in AVATARS"
+                :key="avatar"
+                type="button"
+                :class="{ active: form.avatar === avatar }"
+                @click="form.avatar = avatar"
+              >
+                {{ avatar }}
+              </button>
+            </div>
+            <label for="profile-name">昵称</label
+            ><input id="profile-name" v-model="form.nickname" class="editor-input" placeholder="给自己起个名字" />
+            <label>性别</label>
+            <div class="gender-options">
+              <button type="button" :class="{ active: form.gender === 'male' }" @click="form.gender = 'male'">男</button
+              ><button type="button" :class="{ active: form.gender === 'female' }" @click="form.gender = 'female'">
+                女
+              </button>
+            </div>
+          </section>
+          <section v-else-if="editorStep === 2" class="editor-panel numeric-panel">
+            <label for="profile-age">年龄 <small>岁</small></label
+            ><input id="profile-age" v-model.number="form.age" type="number" min="10" max="90" class="editor-input" />
+            <label for="profile-height">身高 <small>cm</small></label
+            ><input
+              id="profile-height"
+              v-model.number="form.height"
+              type="number"
+              min="120"
+              max="230"
+              class="editor-input"
+            />
+            <label for="profile-weight">体重 <small>kg</small></label
+            ><input
+              id="profile-weight"
+              v-model.number="form.weight"
+              type="number"
+              min="30"
+              max="200"
+              step="0.1"
+              class="editor-input"
+            />
+          </section>
+          <section v-else class="editor-panel activity-options">
             <button
               v-for="activity in ACTIVITY_LEVELS"
               :key="activity.key"
-              class="rounded-[16px] p-3 text-left transition-all duration-200"
-              :style="
-                form.activity === activity.key
-                  ? { background: '#fff1e6', boxShadow: 'inset 0 0 0 2px #ffc59b' }
-                  : { background: '#fff', boxShadow: 'inset 0 0 0 1px #e7ecf3' }
-              "
+              type="button"
+              :class="{ active: form.activity === activity.key }"
               @click="form.activity = activity.key"
             >
-              <p class="flex items-center gap-1.5 text-[13px] font-bold tx-main">
-                <span aria-hidden="true">{{ activity.emoji }}</span>
-                {{ activity.label }}
-              </p>
-              <p class="mt-1 text-[11px] tx-muted">{{ activity.desc }}</p>
+              <span>{{ activity.emoji }}</span
+              ><strong>{{ activity.label }}</strong
+              ><small>{{ activity.desc }}</small
+              ><b>{{ form.activity === activity.key ? '已选择' : '' }}</b>
             </button>
-          </div>
-
-          <!-- 操作按钮 -->
-          <div class="mt-5 flex items-center gap-3">
-            <button class="btn btn-primary" @click="saveProfile">💾 保存档案</button>
-            <button class="btn btn-ghost" @click="resetProfile">↺ 恢复默认</button>
-          </div>
-        </MacaronCard>
-
-        <!-- 右栏：实时身体指标 -->
-        <MacaronCard theme="cyan" emoji="📏" title="身体指标" sub="由档案实时推导而来">
-          <div class="soft-panel">
-            <div class="flex items-center justify-between">
-              <div>
-                <p class="tile-label"><span aria-hidden="true">⚖️</span> BMI 身体质量指数</p>
-                <p class="num mt-1 text-[34px] font-extrabold leading-none" :style="{ color: metrics.bmiGrade.color }">
-                  {{ metrics.bmi }}
-                </p>
-              </div>
-              <span
-                class="badge"
-                :style="{ backgroundColor: metrics.bmiGrade.bg, color: metrics.bmiGrade.color }"
-              >
-                {{ metrics.bmiGrade.emoji }} {{ metrics.bmiGrade.label }}
-              </span>
+          </section>
+          <section class="preview-strip">
+            <div>
+              <span>预览 BMI</span><strong class="num">{{ previewMetrics.bmi }}</strong>
             </div>
-            <p class="mt-2 text-[11.5px] tx-muted">{{ metrics.bmiGrade.advice }}</p>
-          </div>
-
-          <div class="mt-3 grid grid-cols-2 gap-4">
-            <StatTile theme="white" label="基础代谢 BMR" emoji="🔥" :value="metrics.bmr" unit="kcal" />
-            <StatTile theme="white" label="每日消耗 TDEE" emoji="⚡" :value="metrics.tdee" unit="kcal" />
-            <StatTile theme="white" label="每日推荐热量" emoji="🎯" :value="metrics.dailyCalories" unit="kcal" />
-            <StatTile
-              theme="white"
-              label="饮食模式"
-              emoji="🍽️"
-              :value="metrics.dietModeEmoji + ' ' + metrics.dietMode"
-            />
-          </div>
-
-          <p class="mt-3 text-[11.5px] tx-muted">💡 {{ metrics.dietModeDesc }}</p>
-        </MacaronCard>
-      </div>
-
-      <!-- ===================== 2. 整体数据统计 ===================== -->
-      <MacaronCard theme="green" emoji="📈" title="整体数据统计" sub="近 7 天汇总数据">
-        <div class="grid grid-cols-4 gap-4">
-          <StatTile theme="white" label="本周记录天数" emoji="📅" :value="stats.days" unit="天" />
-          <StatTile theme="white" label="日均热量" emoji="🔥" :value="stats.avgCalories" unit="kcal" />
-          <StatTile theme="white" label="日均健康评分" emoji="⭐" :value="stats.avgScore" unit="分" />
-          <StatTile theme="white" label="最高评分" emoji="🏆" :value="stats.bestScore" :sub="'来自 ' + bestDateText" />
-          <StatTile theme="white" label="平均蛋白质" emoji="🥩" :value="stats.avgProtein" unit="g" />
-          <StatTile theme="white" label="平均膳食纤维" emoji="🌿" :value="stats.avgFiber" unit="g" />
-          <StatTile theme="white" label="累计记录条数" emoji="📝" :value="stats.totalRecords" unit="条" />
-          <StatTile theme="white" label="累计饮水" emoji="💧" :value="totalWaterL" unit="L" />
+            <div>
+              <span>推荐热量</span><strong class="num">{{ previewMetrics.dailyCalories }} kcal</strong>
+            </div>
+            <p>{{ previewMetrics.bmiGrade.label }} · 保存后全站数据将同步更新</p>
+          </section>
         </div>
-      </MacaronCard>
-
-      <!-- ===================== 3. 一周趋势图表 ===================== -->
-      <MacaronCard
-        theme="blue"
-        emoji="📊"
-        title="一周趋势图表"
-        sub="近 7 天热量趋势（含目标线）与健康评分"
-        :static-scale="true"
-      >
-        <div class="grid grid-cols-2 gap-5">
+        <footer class="drawer-footer">
+          <button type="button" class="reset-editor" @click="resetEditorForm">恢复默认填写</button>
           <div>
-            <p class="mb-2 text-[12.5px] font-bold tx-sub">🔥 近 7 天热量趋势</p>
-            <BaseChart :option="lineOption" height="300px" />
+            <button v-if="editorStep > 1" type="button" class="btn btn-ghost" @click="editorStep--">上一步</button
+            ><button v-if="editorStep < 3" type="button" class="btn btn-primary" @click="editorStep++">下一步</button
+            ><button v-else type="button" class="btn btn-primary" @click="saveProfile">保存档案</button>
           </div>
-          <div>
-            <p class="mb-2 text-[12.5px] font-bold tx-sub">⭐ 近 7 天健康评分</p>
-            <BaseChart :option="barOption" height="300px" />
-          </div>
-        </div>
-      </MacaronCard>
+        </footer>
+      </aside>
+    </Transition>
 
-      <!-- ===================== 4. 历史饮食记录 ===================== -->
-      <MacaronCard theme="yellow" emoji="🗂️" title="历史饮食记录" sub="最近 7 天（含今天），点击展开当日明细">
-        <div v-if="hasHistory" class="space-y-3">
-          <div v-for="day in historyDays" :key="day.date" class="soft-panel">
-            <!-- 每天一行 -->
-            <button class="flex w-full items-center gap-4 text-left" @click="toggleDay(day.date)">
-              <div class="w-[150px] shrink-0">
-                <p class="text-[13.5px] font-bold tx-main">{{ formatCN(day.date) }} · {{ relativeDay(day.date) }}</p>
-                <p class="text-[11px] tx-muted">{{ day.weekday }}</p>
-              </div>
-              <div class="grid flex-1 grid-cols-4 gap-3">
-                <div class="text-center">
-                  <p class="text-[11px] tx-muted">🔥 热量</p>
-                  <p class="num text-[15px] font-bold tx-main">{{ day.calories }} kcal</p>
-                </div>
-                <div class="text-center">
-                  <p class="text-[11px] tx-muted">⭐ 评分</p>
-                  <p class="num text-[15px] font-bold" :style="{ color: day.grade.color }">{{ day.score }}</p>
-                </div>
-                <div class="text-center">
-                  <p class="text-[11px] tx-muted">📝 记录条数</p>
-                  <p class="num text-[15px] font-bold tx-main">{{ day.recordCount }}</p>
-                </div>
-                <div class="text-center">
-                  <p class="text-[11px] tx-muted">💧 饮水</p>
-                  <p class="num text-[15px] font-bold tx-main">{{ day.water }} ml</p>
-                </div>
-              </div>
-              <span class="shrink-0 text-[14px] tx-muted">{{ expandedDay === day.date ? '▲' : '▼' }}</span>
-            </button>
-
-            <!-- 展开：按餐段分组的记录明细 -->
-            <div v-if="expandedDay === day.date && expandedDetail" class="anim-fade-up mt-3">
-              <div class="flex items-center justify-between">
-                <p class="text-[12px] tx-muted">
-                  共 {{ expandedDetail.recordCount }} 条记录 · 饮水 {{ expandedDetail.water }} ml
-                </p>
-                <span v-if="expandedDetail.isToday" class="tag tag-green">今天可逐条删除</span>
-              </div>
-
-              <div v-for="group in expandedDetail.groups" :key="group.type" class="mt-3">
-                <p class="mb-1.5 text-[12.5px] font-bold tx-sub">{{ group.emoji }} {{ group.type }}</p>
-                <ul class="space-y-1.5">
-                  <li
-                    v-for="record in group.items"
-                    :key="record.id"
-                    class="flex items-center gap-3 rounded-[12px] px-3 py-2"
-                    style="background: rgba(255, 255, 255, 0.72)"
-                  >
-                    <span aria-hidden="true">{{ record.emoji }}</span>
-                    <span class="text-[12.5px] tx-main">{{ record.name }}</span>
-                    <span class="text-[11px] tx-muted">
-                      {{ record.grams }}{{ record.unit === '100ml' ? 'ml' : 'g' }}
-                    </span>
-                    <span class="num ml-auto text-[12px] font-bold tx-sub">{{ record.nutrition.calories }} kcal</span>
-                    <button
-                      v-if="expandedDetail.isToday"
-                      class="btn btn-danger-soft btn-xs"
-                      @click.stop="removeRecord(record.id)"
-                    >
-                      🗑️
-                    </button>
-                  </li>
-                </ul>
-              </div>
-
-              <EmptyState v-if="!expandedDetail.groups.length" emoji="🍽️" text="当日没有饮食记录" height="110px" />
-            </div>
-          </div>
-        </div>
-        <EmptyState v-else emoji="📭" text="暂无历史记录" sub="去「三餐饮食记录」添加第一条吧" />
-      </MacaronCard>
-
-      <!-- ===================== 5. 历史营养报告 ===================== -->
-      <MacaronCard theme="orange" emoji="📋" title="历史营养报告" sub="点开可查看当日报告详情">
-        <div v-if="hasHistory" class="space-y-3">
-          <div v-for="day in reportDays" :key="day.date" class="soft-panel">
-            <!-- 每天一行：日期 + 评分大数字 + 等级徽章 + 精简评语 -->
-            <button class="flex w-full items-center gap-4 text-left" @click="toggleReport(day.date)">
-              <div class="w-[150px] shrink-0">
-                <p class="text-[13.5px] font-bold tx-main">{{ formatCN(day.date) }} · {{ relativeDay(day.date) }}</p>
-                <p class="text-[11px] tx-muted">{{ day.weekday }}</p>
-              </div>
-              <div class="flex shrink-0 items-center gap-3">
-                <span class="num text-[30px] font-extrabold leading-none" :style="{ color: day.report.grade.color }">
-                  {{ day.report.score }}
-                </span>
-                <span
-                  class="badge"
-                  :style="{ backgroundColor: themeBg(day.report.grade.theme), color: themeText(day.report.grade.theme) }"
-                >
-                  {{ day.report.grade.emoji }} {{ day.report.grade.label }}
-                </span>
-              </div>
-              <p class="flex-1 truncate text-[12px] tx-muted">{{ day.report.grade.desc }}</p>
-              <span class="shrink-0 text-[14px] tx-muted">{{ expandedReport === day.date ? '▲' : '▼' }}</span>
-            </button>
-
-            <!-- 展开：优点 / 待改进 / 超标项 / 缺口项 + 营养素对比 -->
-            <div v-if="expandedReport === day.date" class="anim-fade-up mt-3">
-              <div class="grid grid-cols-2 gap-4">
-                <div class="rounded-[14px] p-3" style="background: rgba(255, 255, 255, 0.72)">
-                  <p class="text-[12.5px] font-bold tx-ok">✅ 优点</p>
-                  <ul class="mt-1.5 space-y-1">
-                    <li v-for="(item, i) in day.report.strengths" :key="i" class="text-[12px] tx-sub">· {{ item }}</li>
-                  </ul>
-                </div>
-                <div class="rounded-[14px] p-3" style="background: rgba(255, 255, 255, 0.72)">
-                  <p class="text-[12.5px] font-bold tx-over">⚠️ 待改进</p>
-                  <ul class="mt-1.5 space-y-1">
-                    <li v-for="(item, i) in day.report.weaknesses" :key="i" class="text-[12px] tx-sub">· {{ item }}</li>
-                  </ul>
-                </div>
-              </div>
-
-              <!-- 超标项 / 缺口项 标签 -->
-              <div class="mt-3 flex flex-wrap gap-2">
-                <span v-for="(item, i) in day.report.overItems" :key="'over-' + i" class="tag tag-orange">
-                  🔴 {{ item.label }} {{ item.value }}{{ item.unit }}
-                </span>
-                <span v-for="(item, i) in day.report.lowItems" :key="'low-' + i" class="tag tag-yellow">
-                  💡 {{ item.label }} {{ item.value }}{{ item.unit }}
-                </span>
-              </div>
-
-              <!-- 营养素实际 / 目标对比 -->
-              <div class="mt-3 grid grid-cols-5 gap-3">
-                <div
-                  v-for="item in day.compare"
-                  :key="item.key"
-                  class="rounded-[14px] p-2.5 text-center"
-                  style="background: rgba(255, 255, 255, 0.72)"
-                >
-                  <p class="text-[11px] tx-muted">{{ item.emoji }} {{ item.label }}</p>
-                  <p class="num mt-1 text-[14px] font-extrabold tx-main">
-                    {{ item.value }}<span class="text-[10px] tx-muted">{{ item.unit }}</span>
-                  </p>
-                  <p class="text-[10px] tx-muted">目标 {{ item.target }}{{ item.unit }}</p>
-                  <div class="mt-1.5 flex justify-center">
-                    <StatusBadge :status="item.status" size="sm" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <EmptyState v-else emoji="📋" text="暂无历史报告" sub="记录饮食后即可生成 AI 报告" />
-      </MacaronCard>
-
-      <!-- ===================== 6. 数据管理 ===================== -->
-      <MacaronCard theme="cyan" emoji="🧰" title="数据管理" sub="所有数据仅保存在本机浏览器，不会上传服务器">
-        <div class="flex items-center gap-3">
-          <button class="btn btn-green" @click="resetDemo">🔄 重置为演示数据</button>
-          <button class="btn btn-danger-soft" @click="clearAllData">🗑️ 清空全部数据</button>
-        </div>
-      </MacaronCard>
-    </div>
-
-    <!-- ===================== Toast 轻提示 ===================== -->
-    <div
-      v-if="toastVisible"
-      class="anim-slide-right fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-pill px-4 py-2.5 text-[13px] font-bold"
-      style="background: #fff; color: #2c3646; box-shadow: 0 10px 30px rgba(31, 45, 61, 0.18)"
-    >
-      <span>{{ toastText }}</span>
-    </div>
+    <div v-if="toastVisible" class="profile-toast">{{ toastText }}</div>
   </div>
 </template>
+
+<style scoped>
+.profile-shell {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  padding: 6px 0 52px;
+}
+.section-eyebrow {
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 800;
+}
+.profile-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 26px 0;
+  border-bottom: 1px solid var(--line);
+}
+.identity-block {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.profile-avatar {
+  width: 66px;
+  height: 66px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: #fff;
+  font-size: 32px;
+}
+.identity-block h1 {
+  margin: 3px 0;
+  color: var(--ink);
+  font-size: 25px;
+}
+.identity-block > div > p:last-child {
+  color: var(--tx-muted);
+  font-size: 12px;
+}
+.profile-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.manage-menu-wrap {
+  position: relative;
+}
+.icon-menu {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--tx-sub);
+  font-weight: 800;
+}
+.manage-menu {
+  position: absolute;
+  z-index: 20;
+  top: 46px;
+  right: 0;
+  width: 230px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(27, 43, 38, 0.12);
+}
+.manage-menu strong {
+  font-size: 12px;
+}
+.manage-menu p {
+  margin: 3px 0 10px;
+  color: var(--tx-muted);
+  font-size: 9px;
+}
+.manage-menu button {
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: #fff;
+  text-align: left;
+  color: var(--tx-sub);
+  font-size: 10px;
+}
+.manage-menu button.danger {
+  color: #b84e4e;
+}
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border-bottom: 1px solid var(--line);
+}
+.metric-strip > div {
+  position: relative;
+  display: grid;
+  gap: 5px;
+  padding: 20px 20px 20px 0;
+}
+.metric-strip > div + div {
+  padding-left: 20px;
+  border-left: 1px solid var(--line);
+}
+.metric-strip span {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.metric-strip strong {
+  color: var(--ink);
+  font-size: 18px;
+}
+.metric-strip strong small {
+  font-size: 9px;
+}
+.metric-strip em {
+  position: absolute;
+  right: 14px;
+  bottom: 23px;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+}
+.profile-tabs {
+  display: flex;
+  gap: 30px;
+  border-bottom: 1px solid var(--line);
+}
+.profile-tabs button {
+  min-height: 52px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--tx-muted);
+  font-size: 12px;
+}
+.profile-tabs button.active {
+  border-bottom-color: var(--brand);
+  color: var(--brand);
+  font-weight: 800;
+}
+.view-section {
+  min-height: 430px;
+  padding: 30px 0;
+}
+.view-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+.view-head h2 {
+  margin-top: 3px;
+  color: var(--ink);
+  font-size: 20px;
+}
+.view-head > p,
+.view-head > a {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.view-head > a {
+  color: var(--brand);
+  font-weight: 800;
+}
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-top: 1px solid var(--line);
+}
+.overview-stat {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  min-height: 112px;
+  padding: 20px 20px 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+.overview-stat:not(:nth-child(4n + 1)) {
+  padding-left: 20px;
+  border-left: 1px solid var(--line);
+}
+.overview-stat span {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.overview-stat strong {
+  color: var(--ink);
+  font-size: 24px;
+}
+.overview-stat strong small {
+  font-size: 10px;
+}
+.overview-stat em {
+  position: absolute;
+  right: 12px;
+  bottom: 22px;
+  color: var(--tx-muted);
+  font-size: 9px;
+  font-style: normal;
+}
+.overview-note {
+  display: grid;
+  grid-template-columns: 100px 1fr auto;
+  align-items: center;
+  gap: 20px;
+  margin-top: 28px;
+  padding: 16px 0;
+  border-block: 1px solid var(--line);
+  font-size: 11px;
+}
+.overview-note p {
+  color: var(--tx-sub);
+}
+.overview-note a {
+  color: var(--brand);
+  font-weight: 800;
+}
+.trend-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 34px;
+}
+.trend-grid > div + div {
+  padding-left: 34px;
+  border-left: 1px solid var(--line);
+}
+.trend-grid h3 {
+  margin-bottom: 10px;
+  color: var(--ink);
+  font-size: 13px;
+}
+.history-list,
+.report-list {
+  border-top: 1px solid var(--line);
+}
+.history-day,
+.report-day {
+  border-bottom: 1px solid var(--line);
+}
+.history-summary {
+  width: 100%;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 190px repeat(4, 1fr) 38px;
+  align-items: center;
+  gap: 14px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.history-summary > span:not(.history-date) {
+  display: grid;
+  gap: 3px;
+}
+.history-summary small {
+  color: var(--tx-muted);
+  font-size: 9px;
+}
+.history-summary strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+.history-date strong {
+  display: block;
+  font-size: 13px;
+}
+.history-summary em,
+.report-summary em {
+  color: var(--brand);
+  font-size: 9px;
+  font-style: normal;
+  text-align: right;
+}
+.history-detail,
+.report-detail {
+  padding: 4px 0 20px 204px;
+}
+.meal-group {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.meal-group h3 {
+  margin-bottom: 7px;
+  font-size: 11px;
+}
+.record-line {
+  display: grid;
+  grid-template-columns: 1fr 80px 90px 40px;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  color: var(--tx-sub);
+  font-size: 10px;
+}
+.record-line small {
+  color: var(--tx-muted);
+}
+.record-line strong {
+  text-align: right;
+}
+.record-line button {
+  border: 0;
+  background: transparent;
+  color: #b84e4e;
+  font-size: 9px;
+}
+.report-summary {
+  width: 100%;
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: 190px 52px 80px 1fr 38px;
+  align-items: center;
+  gap: 15px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.report-summary > span {
+  display: grid;
+  gap: 3px;
+}
+.report-summary > span strong {
+  font-size: 13px;
+}
+.report-summary > span small,
+.report-summary p {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.report-summary > b {
+  font-size: 26px;
+}
+.report-summary i {
+  padding: 4px 7px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-style: normal;
+  text-align: center;
+}
+.report-findings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
+  padding: 15px 0;
+  border-top: 1px solid var(--line);
+}
+.report-findings h3 {
+  margin-bottom: 7px;
+  font-size: 11px;
+}
+.report-findings p {
+  margin-top: 4px;
+  color: var(--tx-sub);
+  font-size: 10px;
+}
+.compare-lines {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 24px;
+}
+.compare-lines > div {
+  display: grid;
+  grid-template-columns: 90px 1fr 52px;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  border-top: 1px solid var(--line);
+  font-size: 9px;
+}
+.compare-lines strong {
+  text-align: right;
+}
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(30, 37, 39, 0.26);
+}
+.profile-drawer {
+  position: fixed;
+  z-index: 70;
+  top: 0;
+  right: 0;
+  width: 480px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  box-shadow: -18px 0 50px rgba(30, 37, 39, 0.13);
+}
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 28px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-head h2 {
+  margin-top: 3px;
+  font-size: 21px;
+}
+.drawer-head > button {
+  border: 0;
+  background: transparent;
+  color: var(--tx-sub);
+  font-size: 10px;
+}
+.editor-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 0 28px;
+  border-bottom: 1px solid var(--line);
+}
+.editor-steps button {
+  display: grid;
+  gap: 2px;
+  padding: 13px 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--tx-muted);
+  font-size: 9px;
+}
+.editor-steps button span {
+  font-size: 8px;
+}
+.editor-steps button.active {
+  border-bottom-color: var(--brand);
+  color: var(--brand);
+  font-weight: 800;
+}
+.drawer-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 28px 28px;
+}
+.editor-panel {
+  display: grid;
+  gap: 10px;
+  padding: 18px 0;
+}
+.editor-panel > label {
+  margin-top: 7px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 800;
+}
+.editor-panel label small {
+  color: var(--tx-muted);
+  font-weight: 500;
+}
+.avatar-options {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 5px;
+}
+.avatar-options button {
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: #fff;
+  font-size: 19px;
+}
+.avatar-options button.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.editor-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  outline: 0;
+  font-size: 12px;
+}
+.editor-input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+.gender-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+.gender-options button {
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--tx-sub);
+  font-size: 11px;
+}
+.gender-options button.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 800;
+}
+.numeric-panel {
+  grid-template-columns: 120px 1fr;
+  align-items: center;
+  gap: 14px;
+}
+.numeric-panel label {
+  margin: 0;
+}
+.activity-options button {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  gap: 2px 10px;
+  padding: 14px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+  text-align: left;
+}
+.activity-options button > span {
+  grid-row: 1/3;
+  font-size: 22px;
+}
+.activity-options strong {
+  font-size: 11px;
+}
+.activity-options small {
+  color: var(--tx-muted);
+  font-size: 9px;
+}
+.activity-options b {
+  grid-row: 1/3;
+  grid-column: 3;
+  align-self: center;
+  color: var(--brand);
+  font-size: 9px;
+}
+.activity-options button.active {
+  background: var(--brand-soft);
+}
+.preview-strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 18px;
+  margin-top: 10px;
+  padding: 16px 0;
+  border-block: 1px solid var(--line);
+}
+.preview-strip div {
+  display: grid;
+  gap: 4px;
+}
+.preview-strip span,
+.preview-strip p {
+  color: var(--tx-muted);
+  font-size: 9px;
+}
+.preview-strip strong {
+  font-size: 17px;
+}
+.preview-strip p {
+  grid-column: 1/-1;
+}
+.drawer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 28px;
+  border-top: 1px solid var(--line);
+}
+.drawer-footer > div {
+  display: flex;
+  gap: 7px;
+}
+.reset-editor {
+  border: 0;
+  background: transparent;
+  color: var(--tx-muted);
+  font-size: 9px;
+}
+.profile-toast {
+  position: fixed;
+  z-index: 90;
+  right: 28px;
+  bottom: 28px;
+  padding: 10px 17px;
+  border-radius: 999px;
+  background: #27322f;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.drawer-slide-enter-active,
+.drawer-slide-leave-active {
+  transition: transform 0.28s ease;
+}
+.drawer-slide-enter-from,
+.drawer-slide-leave-to {
+  transform: translateX(100%);
+}
+.drawer-fade-enter-active,
+.drawer-fade-leave-active,
+.view-fade-enter-active,
+.view-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.drawer-fade-enter-from,
+.drawer-fade-leave-to,
+.view-fade-enter-from,
+.view-fade-leave-to {
+  opacity: 0;
+}
+</style>

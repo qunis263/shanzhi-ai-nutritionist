@@ -14,9 +14,11 @@ import { sumNutrition, buildReport, buildMealPlan } from '../utils/nutrition'
 import { todayStr, weekdayCN, formatCN, lastNDays, nowTimeStr, isToday } from '../utils/date'
 import { readJSON, writeJSON, removeKey, STORAGE_KEYS } from '../utils/storage'
 import { useUserStore } from './user'
+import { usePilotStore } from './pilot'
 
 export const useDietStore = defineStore('diet', () => {
   const userStore = useUserStore()
+  const pilotStore = usePilotStore()
 
   // ================= 状态 =================
   /** 今日日期字符串，用于检测跨天 */
@@ -32,8 +34,8 @@ export const useDietStore = defineStore('diet', () => {
 
   /** 把 mock 历史数据写入 history 对象 */
   function loadMockHistory() {
-    Object.keys(history).forEach((k) => delete history[k])
-    HISTORY_DAYS.forEach((day) => {
+    Object.keys(history).forEach(k => delete history[k])
+    HISTORY_DAYS.forEach(day => {
       history[day.date] = { records: day.records, water: day.water }
     })
   }
@@ -59,7 +61,7 @@ export const useDietStore = defineStore('diet', () => {
       records.value = stored.records || []
       water.value = stored.water || 0
       const storedHistory = stored.history || {}
-      Object.keys(history).forEach((k) => delete history[k])
+      Object.keys(history).forEach(k => delete history[k])
       Object.assign(history, storedHistory)
       // 历史为空时补齐演示数据，保证「历史记录 / 大屏」有内容展示
       if (!Object.keys(history).length) loadMockHistory()
@@ -113,18 +115,18 @@ export const useDietStore = defineStore('diet', () => {
   /** 按餐段分组的今日记录：{ 早餐: [...], 午餐: [...], 晚餐: [...], 零食: [...] } */
   const mealGroups = computed(() => {
     const groups = {}
-    MEAL_TYPES.forEach((t) => {
-      groups[t] = records.value.filter((r) => r.mealType === t)
+    MEAL_TYPES.forEach(t => {
+      groups[t] = records.value.filter(r => r.mealType === t)
     })
     return groups
   })
 
   /** 今日各餐段热量（用于「饮水与三餐」柱状图） */
-  const mealCalories = computed(() => MEAL_TYPES.map((t) => Math.round(sumNutrition(mealGroups.value[t]).calories)))
+  const mealCalories = computed(() => MEAL_TYPES.map(t => Math.round(sumNutrition(mealGroups.value[t]).calories)))
 
   /** 一周数据（最近 7 天含今天），用于热量折线图与柱状图 */
   const weekData = computed(() =>
-    lastNDays(7).map((date) => {
+    lastNDays(7).map(date => {
       const day = getDay(date)
       const s = sumNutrition(day.records)
       const r = buildReport({
@@ -157,13 +159,13 @@ export const useDietStore = defineStore('diet', () => {
     weekData.value
       .slice()
       .reverse()
-      .map((d) => {
+      .map(d => {
         const day = getDay(d.date)
         return {
           ...d,
           records: day.records,
           water: day.water,
-          mealCount: new Set(day.records.map((r) => r.mealType)).size,
+          mealCount: new Set(day.records.map(r => r.mealType)).size,
           recordCount: day.records.length
         }
       })
@@ -171,14 +173,18 @@ export const useDietStore = defineStore('diet', () => {
 
   /** 整体数据统计（个人中心展示） */
   const stats = computed(() => {
-    const validDays = weekData.value.filter((d) => d.calories > 0)
-    const avgCalories = validDays.length ? Math.round(validDays.reduce((a, b) => a + b.calories, 0) / validDays.length) : 0
+    const validDays = weekData.value.filter(d => d.calories > 0)
+    const avgCalories = validDays.length
+      ? Math.round(validDays.reduce((a, b) => a + b.calories, 0) / validDays.length)
+      : 0
     const avgScore = validDays.length ? Math.round(validDays.reduce((a, b) => a + b.score, 0) / validDays.length) : 0
     const bestDay = weekData.value.reduce((best, d) => (d.score > (best?.score || 0) ? d : best), null)
     const totalRecords = historyDays.value.reduce((a, b) => a + b.recordCount, 0) + records.value.length
     const totalWater = historyDays.value.reduce((a, b) => a + b.water, 0) + water.value
     const totalCalories = weekData.value.reduce((a, b) => a + b.calories, 0)
-    const avgProtein = validDays.length ? Math.round(validDays.reduce((a, b) => a + b.protein, 0) / validDays.length) : 0
+    const avgProtein = validDays.length
+      ? Math.round(validDays.reduce((a, b) => a + b.protein, 0) / validDays.length)
+      : 0
     const avgFiber = validDays.length ? Math.round(validDays.reduce((a, b) => a + b.fiber, 0) / validDays.length) : 0
     return {
       days: validDays.length,
@@ -197,10 +203,12 @@ export const useDietStore = defineStore('diet', () => {
 
   /** 今日各营养素的达标进度（用于进度条组件） */
   const progressList = computed(() =>
-    Object.keys(targets.value).map((key) => {
-      const item = report.value.items.find((i) => i.key === key)
-      return item || null
-    }).filter(Boolean)
+    Object.keys(targets.value)
+      .map(key => {
+        const item = report.value.items.find(i => i.key === key)
+        return item || null
+      })
+      .filter(Boolean)
   )
 
   // ================= 行为方法 =================
@@ -243,6 +251,7 @@ export const useDietStore = defineStore('diet', () => {
       nutrition: scaleNutrition(target, amount)
     }
     records.value.push(record)
+    pilotStore.track('diet_record_added', { mealType: record.mealType, foodId: record.foodId })
     save()
     return record
   }
@@ -252,7 +261,7 @@ export const useDietStore = defineStore('diet', () => {
    * @param {string} id 记录 id
    */
   function removeRecord(id) {
-    const idx = records.value.findIndex((r) => r.id === id)
+    const idx = records.value.findIndex(r => r.id === id)
     if (idx > -1) {
       records.value.splice(idx, 1)
       save()
@@ -292,13 +301,13 @@ export const useDietStore = defineStore('diet', () => {
   function clearAll() {
     records.value = []
     water.value = 0
-    Object.keys(history).forEach((k) => delete history[k])
+    Object.keys(history).forEach(k => delete history[k])
     removeKey(STORAGE_KEYS.diet)
   }
 
   /** 找到某条历史记录（用于详情展示） */
   function findRecord(id) {
-    return records.value.find((r) => r.id === id) || null
+    return records.value.find(r => r.id === id) || null
   }
 
   // ================= 持久化监听 =================

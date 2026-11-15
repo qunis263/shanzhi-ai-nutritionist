@@ -70,15 +70,15 @@ export function calcBMI(height, weight) {
 export function bmiGrade(bmi) {
   const v = Number(bmi) || 0
   if (v <= 0) {
-    return { key: 'unknown', label: '待测评', emoji: '❔', color: '#98a5b5', bg: '#f3f5f9', advice: '请先完成身体数据测评。', min: 0, max: 0 }
+    return { key: 'unknown', label: '待测评', emoji: '❔', color: '#9aa3b2', bg: '#f3f5f9', advice: '请先完成身体数据测评。', min: 0, max: 0 }
   }
   if (v < 18.5) {
     return {
       key: 'thin',
       label: '偏瘦',
       emoji: '💡',
-      color: '#f5a524',
-      bg: '#fff9e6',
+      color: '#d97706',
+      bg: '#f9f6ec',
       advice: '体重偏低，建议增加优质蛋白与主食摄入，配合力量训练逐步增重。',
       min: 0,
       max: 18.5
@@ -89,8 +89,8 @@ export function bmiGrade(bmi) {
       key: 'normal',
       label: '标准',
       emoji: '✅',
-      color: '#10b981',
-      bg: '#e6f7ef',
+      color: '#0f9b8c',
+      bg: '#eef7f4',
       advice: '体重处于健康区间，保持良好的饮食与运动习惯即可。',
       min: 18.5,
       max: 24
@@ -101,8 +101,8 @@ export function bmiGrade(bmi) {
       key: 'overweight',
       label: '超重',
       emoji: '🔴',
-      color: '#f59e0b',
-      bg: '#fffbeb',
+      color: '#d97706',
+      bg: '#f9f6ec',
       advice: '体重超出健康范围，建议制造 300–500 kcal 的每日热量缺口，并增加有氧运动。',
       min: 24,
       max: 28
@@ -112,8 +112,8 @@ export function bmiGrade(bmi) {
     key: 'obese',
     label: '肥胖',
     emoji: '🔴',
-    color: '#ef4444',
-    bg: '#fff1f1',
+    color: '#e5484d',
+    bg: '#fcede9',
     advice: '体重明显超标，建议循序渐进控制热量，优先减少含糖饮料与油炸食品，并咨询专业医师。',
     min: 28,
     max: 99
@@ -264,11 +264,19 @@ export function computeTargets(dailyCalories, weight) {
  * 三、营养状态判定（达标 / 超标 / 偏少）
  * =================================================================== */
 
-/** 状态 → 展示文案、Emoji、样式类、颜色（全站统一） */
+/**
+ * 状态 → 展示文案、Emoji、样式类、颜色（全站统一）
+ * 四级预警色彩体系（低饱和、治愈向）：
+ *   达标          → 低饱和薄荷绿
+ *   偏少          → 浅鹅黄
+ *   轻微超标 100%~120% → 暖橙
+ *   严重超标 > 120%    → 低饱和珊瑚红
+ */
 export const STATUS_META = {
-  ok: { label: '达标', emoji: '✅', badgeClass: 'badge-ok', color: '#10b981', fillClass: 'progress-ok' },
-  over: { label: '超标', emoji: '🔴', badgeClass: 'badge-over', color: '#ef4444', fillClass: 'progress-over' },
-  low: { label: '偏少', emoji: '💡', badgeClass: 'badge-low', color: '#f5a524', fillClass: 'progress-low' }
+  ok: { label: '达标', emoji: '✅', badgeClass: 'badge-ok', color: '#3d8a70', fillClass: 'progress-ok' },
+  low: { label: '偏少', emoji: '💡', badgeClass: 'badge-low', color: '#a98a26', fillClass: 'progress-low' },
+  over: { label: '略高', emoji: '🟠', badgeClass: 'badge-over', color: '#b0652b', fillClass: 'progress-over' },
+  severe: { label: '超标', emoji: '🔴', badgeClass: 'badge-severe', color: '#bd5252', fillClass: 'progress-severe' }
 }
 
 /** 取状态元信息（带兜底） */
@@ -295,15 +303,23 @@ export function evaluateNutrient(key, value, target) {
   } else if (meta.type === 'min') {
     status = ratio < 0.8 ? 'low' : 'ok'
   } else if (meta.type === 'max') {
-    status = ratio > 1 ? 'over' : 'ok'
+    // 上限型：>120% 严重超标，100%~120% 轻微超标
+    if (ratio > 1.2) status = 'severe'
+    else if (ratio > 1) status = 'over'
+    else status = 'ok'
   } else {
     if (ratio < 0.8) status = 'low'
-    else if (ratio > 1.2) status = 'over'
+    else if (ratio > 1.2) status = 'severe'
+    else if (ratio > 1) status = 'over'
     else status = 'ok'
   }
 
   return {
+    // 先展开状态元信息（badgeClass / color / fillClass 供进度条与标签复用）
+    ...statusMeta(status),
     key,
+    // 注意：状态元信息里也有 label / emoji（如「偏少」「💡」），
+    // 必须在展开后覆盖回营养素自身的名称与图标，否则页面上会丢失「热量 / 蛋白质…」
     label: meta.label,
     unit: meta.unit,
     emoji: meta.emoji,
@@ -313,7 +329,9 @@ export function evaluateNutrient(key, value, target) {
     ratio: round1(ratio),
     percent: Math.round(ratio * 100),
     status,
-    ...statusMeta(status)
+    // 状态自身的文案与图标单独给出，避免与营养素名称混淆
+    statusLabel: statusMeta(status).label,
+    statusEmoji: statusMeta(status).emoji
   }
 }
 
@@ -401,10 +419,10 @@ export function calcHealthScore(summary, targets) {
  */
 export function scoreGrade(score) {
   const s = Number(score) || 0
-  if (s >= 90) return { key: 'excellent', label: '优秀', emoji: '🏆', color: '#10b981', theme: 'green', desc: '饮食结构非常均衡，继续保持！' }
-  if (s >= 80) return { key: 'good', label: '良好', emoji: '🌟', color: '#2f9e6b', theme: 'cyan', desc: '整体表现不错，个别营养素还有优化空间。' }
-  if (s >= 70) return { key: 'pass', label: '及格', emoji: '💡', color: '#f5a524', theme: 'yellow', desc: '基本达标，但存在明显的营养短板需要补齐。' }
-  return { key: 'poor', label: '待改善', emoji: '⚠️', color: '#ef4444', theme: 'orange', desc: '饮食结构偏差较大，建议按建议逐项调整。' }
+  if (s >= 90) return { key: 'excellent', label: '优秀', emoji: '🏆', color: '#0f8f84', theme: 'green', desc: '饮食结构非常均衡，继续保持！' }
+  if (s >= 80) return { key: 'good', label: '良好', emoji: '🌟', color: '#217a5c', theme: 'cyan', desc: '整体表现不错，个别营养素还有优化空间。' }
+  if (s >= 70) return { key: 'pass', label: '及格', emoji: '💡', color: '#d97706', theme: 'yellow', desc: '基本达标，但存在明显的营养短板需要补齐。' }
+  return { key: 'poor', label: '待改善', emoji: '⚠️', color: '#e5484d', theme: 'orange', desc: '饮食结构偏差较大，建议按建议逐项调整。' }
 }
 
 /* ===================================================================
@@ -429,8 +447,8 @@ export function buildReport({ summary, targets, water = 0, records = [] }) {
     return evaluateNutrient(key, raw, targets[key])
   })
 
-  // ---- 2. 超标项 / 缺失项 ----
-  const overItems = items.filter((i) => i.status === 'over')
+  // ---- 2. 超标项（含严重超标）/ 缺失项 ----
+  const overItems = items.filter((i) => i.status === 'over' || i.status === 'severe')
   const lowItems = items.filter((i) => i.status === 'low')
   const okItems = items.filter((i) => i.status === 'ok')
 
@@ -499,11 +517,77 @@ export function buildReport({ summary, targets, water = 0, records = [] }) {
   }
 }
 
-/** 统计三餐覆盖情况 */
+/**
+ * 统计三餐覆盖情况
+ */
 export function countMeals(records = []) {
   const covered = new Set(records.filter((r) => r.mealType !== '零食').map((r) => r.mealType))
   return { mealsCovered: covered.size, coveredMeals: [...covered] }
 }
+
+/* ===================================================================
+ * 三·补充、首页「简洁模式」优先提醒（人话文案，禁止出现百分比）
+ * =================================================================== */
+
+/** 超标提示优先级：糖 > 钠 > 脂肪 > 热量 > 碳水 */
+const TIP_PRIORITY = ['sugar', 'sodium', 'fat', 'calories', 'carb']
+
+/** 各营养素的「人话版」超标提醒（只描述来源与做法，不写超标百分比） */
+const PLAIN_TIPS = {
+  sugar: '🍬糖分偏高，大概率来自奶茶甜品，建议减少甜饮',
+  sodium: '🧂今天口味偏咸，外卖卤制品是主要来源',
+  fat: '🍳油脂摄入偏多，煎炸和肥肉可以换成蒸煮',
+  calories: '🔥总热量吃超了一点，晚餐七分饱就刚刚好',
+  carb: '🍚主食偏多，可以把一部分换成杂粮或蔬菜'
+}
+
+/** 挑出优先级最高的一条超标提醒（只输出 1 条） */
+export function pickPriorityTip(items = []) {
+  const overLike = items.filter((i) => i.status === 'over' || i.status === 'severe')
+  for (const key of TIP_PRIORITY) {
+    if (overLike.some((i) => i.key === key)) return PLAIN_TIPS[key]
+  }
+  const other = overLike[0]
+  if (other) return `${other.emoji}${other.label}有点偏高，下一餐稍微清淡一点就好`
+  return ''
+}
+
+/**
+ * 生成首页「简洁模式」的一句话提醒：
+ * 先正向夸奖，再只给 1 条优先级最高的超标建议
+ * @returns {{praise: string, tip: string}}
+ */
+export function buildDailyBrief({ report, records = [] }) {
+  const okItems = report.okItems || []
+  const overLike = (report.items || []).filter((i) => i.status === 'over' || i.status === 'severe')
+  let praise = ''
+
+  if (!records.length) {
+    praise = '今天还没有饮食记录，先从记录一餐开始吧'
+  } else if (okItems.some((i) => i.key === 'calories')) {
+    praise = '很棒！今天总热量控制达标👍'
+  } else if (okItems.some((i) => i.key === 'protein')) {
+    praise = '不错！今天的蛋白质吃得够量👍'
+  } else if (okItems.some((i) => i.key === 'water')) {
+    praise = '很好！今天喝水很到位👍'
+  } else if (!overLike.length) {
+    praise = '很棒！今天的营养结构比较均衡👍'
+  } else {
+    praise = '有记录就是进步，继续保持👏'
+  }
+
+  const tip = pickPriorityTip(report.items || []) || '今天没有明显超标项，保持这个节奏就好 🌿'
+  return { praise, tip }
+}
+
+/** 首页轮换展示的温柔营养短句（不遮挡任何功能按钮） */
+export const GENTLE_TIPS = [
+  '🌿 慢慢吃，七分饱，身体会很舒服',
+  '💧 每隔 1.5 小时喝 200ml 水，代谢更顺畅',
+  '🥬 每餐先吃蔬菜，饱腹感会更持久',
+  '🌙 晚餐清淡一点，睡眠会更安稳',
+  '🍎 用水果代替甜点，甜味一样能满足'
+]
 
 /** 推断糖分的主要来源食物（用于报告更「像 AI」） */
 function sugarSourceHint(records = []) {

@@ -52,7 +52,7 @@ const SORTS = [
  */
 const calorieList = computed(() => {
   const kw = keyword.value.trim()
-  let list = CALORIE_TABLE_FULL.filter((food) => {
+  let list = CALORIE_TABLE_FULL.filter(food => {
     const matchKeyword = !kw || food.name.includes(kw)
     const matchCategory = activeCategory.value === '全部' || food.category === activeCategory.value
     return matchKeyword && matchCategory
@@ -148,7 +148,9 @@ function conflictEmoji(level) {
               {{ s.label }}
             </button>
           </div>
-          <span class="chip">共 <b class="num chip-strong">{{ calorieList.length }}</b> 条</span>
+          <span class="chip"
+            >共 <b class="num chip-strong">{{ calorieList.length }}</b> 条</span
+          >
         </div>
 
         <!-- 分类筛选 -->
@@ -184,7 +186,9 @@ function conflictEmoji(level) {
                   <span aria-hidden="true">{{ item.emoji }}</span>
                   {{ item.name }}
                 </td>
-                <td><span class="tag">{{ item.category }}</span></td>
+                <td>
+                  <span class="tag">{{ item.category }}</span>
+                </td>
                 <td class="tx-sub">{{ item.portion }}</td>
                 <td class="num font-bold" :class="calorieClass(item.calories)">{{ item.calories }} kcal</td>
                 <td class="tx-sub">🏃 慢跑 {{ item.burnMin }} 分钟</td>
@@ -245,9 +249,13 @@ function conflictEmoji(level) {
             <!-- 配对展示 + 等级标签 -->
             <div class="flex items-center justify-between gap-3">
               <div class="flex items-center gap-2 text-[14px] font-bold tx-main">
-                <span><span aria-hidden="true">{{ conflict.a.emoji }}</span> {{ conflict.a.name }}</span>
+                <span
+                  ><span aria-hidden="true">{{ conflict.a.emoji }}</span> {{ conflict.a.name }}</span
+                >
                 <span class="tx-muted">➕</span>
-                <span><span aria-hidden="true">{{ conflict.b.emoji }}</span> {{ conflict.b.name }}</span>
+                <span
+                  ><span aria-hidden="true">{{ conflict.b.emoji }}</span> {{ conflict.b.name }}</span
+                >
               </div>
               <span class="tag shrink-0" :class="conflictTag(conflict.level)">
                 {{ conflictEmoji(conflict.level) }} {{ conflictText(conflict.level) }}

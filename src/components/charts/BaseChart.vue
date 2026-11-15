@@ -88,7 +88,7 @@ watch(() => props.option, render, { deep: true })
 // loading 结束时补一次 resize，保证图表尺寸正确
 watch(
   () => props.loading,
-  (v) => {
+  v => {
     if (!v) nextTick(handleResize)
   }
 )

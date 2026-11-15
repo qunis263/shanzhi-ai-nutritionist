@@ -2,31 +2,30 @@
  * 主题配色映射工具
  * ------------------------------------------------------------------
  * 把「主题名」（orange / green / blue / purple / yellow / cyan）
- * 映射到对应的马卡龙底色与深色文字色，
- * 供需要在 JS 中动态上色的场景使用（导航高亮、ECharts 联动、动态标签等）。
- * 六种底色与需求中给定的色值严格一致，全站不得随意更改。
+ * 映射到对应的低饱和点缀底色与文字色，供 JS 动态上色场景使用。
+ * 风格基准：极简商务 SaaS —— 低饱和点缀底 + 委托色文字，整体克制。
  */
 
-/** 马卡龙底色（浅色卡片背景） */
+/** 低饱和点缀底色（浅色背景，卡片主体仍为纯白） */
 export const THEME_BG = {
-  orange: '#fff1e6',
-  green: '#e6f7ef',
-  blue: '#e6f4ff',
-  purple: '#f3efff',
-  yellow: '#fff9e6',
-  cyan: '#e6f9f7',
+  orange: '#fbf4ef',
+  green: '#eef7f4',
+  blue: '#eff4fb',
+  purple: '#f3f0f9',
+  yellow: '#f9f6ec',
+  cyan: '#edf7f6',
   white: '#ffffff'
 }
 
-/** 与底色搭配的深色文字 / 描边色（保证可读性） */
+/** 与底色搭配的文字 / 描边色（保证可读性） */
 export const THEME_TEXT = {
-  orange: '#b46b3a',
-  green: '#2f9e6b',
-  blue: '#3b7fd4',
-  purple: '#7a5fd0',
-  yellow: '#b9912f',
-  cyan: '#2f9e9a',
-  white: '#3a4553'
+  orange: '#b06a3c',
+  green: '#217a5c',
+  blue: '#3a5f8a',
+  purple: '#6a5bb0',
+  yellow: '#a07b1f',
+  cyan: '#237c78',
+  white: '#1d2430'
 }
 
 /** 主题名列表（用于按顺序取色，保证配色循环稳定） */

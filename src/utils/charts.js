@@ -18,27 +18,27 @@ import { round1 } from './nutrition'
  * 一、色板与基础样式
  * =================================================================== */
 
-/** 马卡龙主色板（与 CSS 设计变量一一对应，饱和度略提高以便图表清晰可辨） */
+/** 极简商务图表主色板（低饱和松石绿系列 + 克制的炭灰/辅助色） */
 export const MACARON = {
-  orange: '#ffb27a',
-  green: '#7fdbb0',
-  blue: '#8cc4f5',
-  purple: '#b9a6f2',
-  yellow: '#ffd98a',
-  cyan: '#8adfd8'
+  orange: '#e8a06a',
+  green: '#2aa698',
+  blue: '#6a8fd4',
+  purple: '#8a7cc0',
+  yellow: '#d9a24a',
+  cyan: '#64bdb5'
 }
 
 /** 图表系列默认取色顺序 */
-export const PALETTE = [MACARON.orange, MACARON.green, MACARON.blue, MACARON.purple, MACARON.yellow, MACARON.cyan]
+export const PALETTE = [MACARON.green, MACARON.orange, MACARON.blue, MACARON.cyan, MACARON.purple, MACARON.yellow]
 
-/** 统一文字色 */
+/** 统一文字色（炭灰灰阶） */
 export const TEXT_COLOR = {
-  main: '#3a4553',
-  sub: '#6b7a8d',
-  muted: '#98a5b5'
+  main: '#1d2430',
+  sub: '#6b7382',
+  muted: '#9aa3b2'
 }
 
-/** 三大营养素固定配色：碳水 🍚 橙 / 蛋白质 🥩 绿 / 脂肪 🥑 黄 */
+/** 三大营养素固定配色：碳水 🍚 橙 / 蛋白质 🥩 松石绿 / 脂肪 🥑 黄 */
 export const MACRO_COLORS = {
   carb: MACARON.orange,
   protein: MACARON.green,
@@ -50,11 +50,11 @@ export function tooltipBase(trigger = 'axis') {
   return {
     trigger,
     backgroundColor: '#ffffff',
-    borderColor: '#eef2f7',
+    borderColor: '#e7eaef',
     borderWidth: 1,
-    padding: [10, 14],
+    padding: [8, 12],
     textStyle: { color: TEXT_COLOR.main, fontSize: 12 },
-    extraCssText: 'border-radius:14px;box-shadow:0 8px 24px rgba(31,45,61,.12);'
+    extraCssText: 'border-radius:10px;box-shadow:0 4px 16px rgba(16,24,40,.08);'
   }
 }
 
@@ -65,7 +65,7 @@ export function axisLabelStyle() {
 
 /** 统一横向分割线样式 */
 export function splitLineStyle() {
-  return { lineStyle: { color: '#f1f4f9', type: 'dashed' } }
+  return { lineStyle: { color: '#eef1f5', type: 'dashed' } }
 }
 
 /** 通用网格配置 */
@@ -102,13 +102,15 @@ export function macaronPieOption({ data = [], centerTitle = '', centerValue = ''
       textStyle: { color: TEXT_COLOR.sub, fontSize: 12 }
     },
     // 圆心文字：总量展示
+    // 说明：这里不能显式设置 textAlign:'center'——ECharts 在显式对齐时不会再把布局矩形
+    // 右移半个宽度，整块文字会整体左偏（看起来不在环心）。交给 left:'center' 自动推导对齐即可。
     title: centerValue !== ''
       ? {
           text: String(centerValue),
           subtext: centerTitle ? `${centerTitle}${centerUnit ? ' / ' + centerUnit : ''}` : '',
           left: 'center',
-          top: donut ? '40%' : '44%',
-          textAlign: 'center',
+          top: '38%',
+          textVerticalAlign: 'top',
           textStyle: { color: TEXT_COLOR.main, fontSize: 22, fontWeight: 800 },
           subtextStyle: { color: TEXT_COLOR.muted, fontSize: 11 }
         }
@@ -154,11 +156,11 @@ export function macaronLineOption({ labels = [], series = [], target = null, tar
       ? {
           silent: true,
           symbol: 'none',
-          lineStyle: { color: '#f5a524', type: 'dashed', width: 1.5 },
+          lineStyle: { color: '#d97706', type: 'dashed', width: 1.5 },
           label: {
             formatter: `${targetLabel} ${target}`,
             position: 'insideEndTop',
-            color: '#b8801a',
+            color: '#a07b1f',
             fontSize: 11,
             fontWeight: 'bold'
           },
@@ -185,7 +187,7 @@ export function macaronLineOption({ labels = [], series = [], target = null, tar
       type: 'category',
       boundaryGap: false,
       data: labels,
-      axisLine: { lineStyle: { color: '#e7ecf3' } },
+      axisLine: { lineStyle: { color: '#e7eaef' } },
       axisTick: { show: false },
       axisLabel: axisLabelStyle()
     },
@@ -248,7 +250,7 @@ export function macaronBarOption({ labels = [], values = [], colors = null, name
     color: PALETTE,
     tooltip: {
       ...tooltipBase('axis'),
-      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(255,241,230,.35)' } },
+      axisPointer: { type: 'shadow', shadowStyle: { color: '#f4f6f8' } },
       formatter: (list) => {
         const p = Array.isArray(list) ? list[0] : list
         return `${p.axisValue}<br/>${p.marker}${name}：<b>${round1(p.value)}</b> ${unit}`
@@ -258,7 +260,7 @@ export function macaronBarOption({ labels = [], values = [], colors = null, name
     xAxis: {
       type: 'category',
       data: labels,
-      axisLine: { lineStyle: { color: '#e7ecf3' } },
+      axisLine: { lineStyle: { color: '#e7eaef' } },
       axisTick: { show: false },
       axisLabel: axisLabelStyle()
     },
@@ -275,7 +277,7 @@ export function macaronBarOption({ labels = [], values = [], colors = null, name
         type: 'bar',
         barMaxWidth: 34,
         itemStyle: {
-          borderRadius: [10, 10, 4, 4],
+          borderRadius: [6, 6, 3, 3],
           color: (p) => {
             if (colors && colors[p.dataIndex]) return colors[p.dataIndex]
             return PALETTE[p.dataIndex % PALETTE.length]
@@ -313,7 +315,12 @@ export function macaronMealWaterOption({ mealLabels = [], mealValues = [], water
   return {
     tooltip: {
       ...tooltipBase('axis'),
-      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(230,244,255,.5)' } }
+      axisPointer: { type: 'line', lineStyle: { color: '#aeb8c7', type: 'dashed', width: 1 } },
+      formatter: (items) => {
+        const list = (Array.isArray(items) ? items : [items]).filter((item) => item.value !== '-' && item.value !== undefined)
+        if (!list.length) return ''
+        return `${list[0].axisValue}<br/>${list.map((item) => `${item.marker}${item.seriesName}：<b>${item.value}</b> ${item.seriesName === '饮水' ? 'ml' : 'kcal'}`).join('<br/>')}`
+      }
     },
     legend: {
       top: 0,
@@ -327,7 +334,7 @@ export function macaronMealWaterOption({ mealLabels = [], mealValues = [], water
     xAxis: {
       type: 'category',
       data: [...mealLabels, '饮水'],
-      axisLine: { lineStyle: { color: '#e7ecf3' } },
+      axisLine: { lineStyle: { color: '#e7eaef' } },
       axisTick: { show: false },
       axisLabel: axisLabelStyle()
     },
@@ -357,10 +364,10 @@ export function macaronMealWaterOption({ mealLabels = [], mealValues = [], water
         name: '热量',
         type: 'bar',
         yAxisIndex: 0,
-        barMaxWidth: 30,
+        barMaxWidth: 38,
         itemStyle: {
-          borderRadius: [10, 10, 4, 4],
-          color: (p) => [MACARON.yellow, MACARON.orange, MACARON.purple, MACARON.cyan][p.dataIndex] || MACARON.orange
+          borderRadius: [6, 6, 3, 3],
+          color: (p) => [MACARON.yellow, MACARON.orange, MACARON.blue, MACARON.cyan][p.dataIndex] || MACARON.orange
         },
         label: {
           show: true,
@@ -375,8 +382,8 @@ export function macaronMealWaterOption({ mealLabels = [], mealValues = [], water
         name: '饮水',
         type: 'bar',
         yAxisIndex: 1,
-        barMaxWidth: 30,
-        itemStyle: { borderRadius: [10, 10, 4, 4], color: MACARON.blue },
+        barMaxWidth: 38,
+        itemStyle: { borderRadius: [6, 6, 3, 3], color: MACARON.blue },
         label: {
           show: true,
           position: 'top',
@@ -420,7 +427,7 @@ export function macaronGaugeOption({ value = 0, color = MACARON.green, name = '�
           itemStyle: { color }
         },
         axisLine: {
-          lineStyle: { width: 16, color: [[1, '#f1f4f9']] },
+          lineStyle: { width: 16, color: [[1, '#eef1f5']] },
           roundCap: true
         },
         pointer: { show: false },
@@ -472,10 +479,10 @@ export function macaronRadarOption({ indicators = [], series = [] }) {
       radius: '62%',
       indicator: indicators,
       axisName: { color: TEXT_COLOR.sub, fontSize: 11 },
-      splitLine: { lineStyle: { color: '#eef2f7' } },
-      axisLine: { lineStyle: { color: '#eef2f7' } },
+      splitLine: { lineStyle: { color: '#eef1f5' } },
+      axisLine: { lineStyle: { color: '#eef1f5' } },
       splitArea: {
-        areaStyle: { color: ['#ffffff', '#fbfcfe'] }
+        areaStyle: { color: ['#ffffff', '#f8fafb'] }
       }
     },
     series: [
@@ -505,7 +512,7 @@ export function macaronRadarOption({ indicators = [], series = [] }) {
  */
 export function hexToRgba(hex, alpha = 1) {
   const h = String(hex || '').replace('#', '')
-  if (h.length !== 6) return `rgba(255,178,122,${alpha})`
+  if (h.length !== 6) return `rgba(42,166,152,${alpha})`
   const r = parseInt(h.slice(0, 2), 16)
   const g = parseInt(h.slice(2, 4), 16)
   const b = parseInt(h.slice(4, 6), 16)

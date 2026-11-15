@@ -14,6 +14,9 @@ import { onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppSidebar from './components/layout/AppSidebar.vue'
 import AppTopbar from './components/layout/AppTopbar.vue'
+import ErrorBoundary from './components/common/ErrorBoundary.vue'
+import ConfirmDialog from './components/common/ConfirmDialog.vue'
+import RouteProgress from './components/common/RouteProgress.vue'
 import { useDietStore } from './store/diet'
 
 const dietStore = useDietStore()
@@ -38,6 +41,9 @@ onMounted(() => {
 
 <template>
   <div class="flex min-h-screen">
+    <!-- 路由懒加载进度条：切换页面时顶部细线提示，避免下载 chunk 期间白屏 -->
+    <RouteProgress />
+
     <!-- 窄屏抽屉遮罩（宽屏隐藏） -->
     <transition name="page">
       <div
@@ -56,14 +62,20 @@ onMounted(() => {
       <!-- 顶部信息栏 -->
       <AppTopbar @toggle-drawer="drawerOpen = !drawerOpen" />
 
-      <!-- 页面内容（带淡入过渡动画） -->
-      <main class="min-w-0 flex-1 px-4 pb-8 pt-5 lg:px-7 lg:pb-9 lg:pt-6">
-        <RouterView v-slot="{ Component }">
-          <transition name="page" mode="out-in">
-            <component :is="Component" />
-          </transition>
-        </RouterView>
+      <!-- 页面内容（带淡入过渡动画）；1920px 宽屏下居中收敛，避免超宽留白 -->
+      <main class="mx-auto w-full min-w-0 max-w-[1560px] flex-1 px-4 pb-8 pt-5 lg:px-7 lg:pb-9 lg:pt-6">
+        <!-- 错误边界：任意页面异常时展示友好兜底页，避免整站白屏 -->
+        <ErrorBoundary>
+          <RouterView v-slot="{ Component }">
+            <transition name="page" mode="out-in">
+              <component :is="Component" />
+            </transition>
+          </RouterView>
+        </ErrorBoundary>
       </main>
     </div>
+
+    <!-- 全局统一确认弹窗（替代原生 confirm） -->
+    <ConfirmDialog />
   </div>
 </template>

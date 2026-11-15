@@ -26,9 +26,16 @@ defineProps({
 </script>
 
 <template>
-  <div class="tile" :class="[`mc-${theme}`, hover ? 'card-hover' : '']">
+  <div class="tile mc-white border border-line" :class="hover ? 'card-hover' : ''">
     <div class="tile-label">
-      <span v-if="emoji" aria-hidden="true">{{ emoji }}</span>
+      <span
+        v-if="emoji"
+        class="emoji-badge"
+        :class="`mc-${theme}`"
+        style="width: 22px; height: 22px; border-radius: 7px; font-size: 13px"
+        aria-hidden="true"
+        >{{ emoji }}</span
+      >
       <span>{{ label }}</span>
     </div>
     <div class="tile-value num" :style="color ? { color } : {}">

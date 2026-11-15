@@ -13,23 +13,19 @@
  *      不重复实现任何营养计算逻辑（统一复用 utils/nutrition 与 data/foods）。
  */
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-
 import PageHeader from '@/components/common/PageHeader.vue'
-import MacaronCard from '@/components/common/MacaronCard.vue'
-import StatTile from '@/components/common/StatTile.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import ProgressBar from '@/components/common/ProgressBar.vue'
-import EmptyState from '@/components/common/EmptyState.vue'
 
 import { useDietStore } from '@/store/diet'
 import { useUserStore } from '@/store/user'
-import { MEAL_EMOJI, MEAL_THEME, MEAL_TYPES } from '@/data/mockHistory'
+import { MEAL_EMOJI, MEAL_TYPES } from '@/data/mockHistory'
 import { FOOD_CATEGORIES, findFood, scaleNutrition, searchFood } from '@/data/foods'
 import { sumNutrition } from '@/utils/nutrition'
-import { formatCN, guessMealByNow, nowTimeStr, todayStr, weekdayCN } from '@/utils/date'
+import { celebrateStars } from '@/utils/celebrate'
+import { formatCN, guessMealByNow, nowTimeStr, todayStr } from '@/utils/date'
+import { confirm } from '@/composables/useConfirm'
 
-const router = useRouter()
 const dietStore = useDietStore()
 const userStore = useUserStore()
 
@@ -55,8 +51,10 @@ onBeforeUnmount(() => clearTimeout(toastTimer))
 /* =================================================================
  * 二、添加记录表单
  * ================================================================= */
-/** 是否显示添加表单（由 PageHeader 的切换按钮控制） */
-const showForm = ref(true)
+/** 右侧添加抽屉：桌面 Web 中按需出现，不再常驻占用页面。 */
+const drawerOpen = ref(false)
+const waterOpen = ref(false)
+const expandedMeal = ref(guessMealByNow())
 
 /** 表单状态：餐段 / 搜索词 / 分类 / 选中食物 / 分量 / 时间 */
 const form = reactive({
@@ -83,7 +81,7 @@ const visibleCount = ref(PAGE_SIZE)
 const matchedFoods = computed(() => {
   const list = searchFood(form.keyword, 0)
   if (form.category === '全部') return list
-  return list.filter((f) => f.category === form.category)
+  return list.filter(f => f.category === form.category)
 })
 
 /** 当前实际渲染的结果（分页后的切片） */
@@ -117,33 +115,20 @@ const previewNutrition = computed(() =>
   selectedFood.value ? scaleNutrition(selectedFood.value, Number(form.grams) || 0) : null
 )
 
-/** 分量输入框旁的参考单位提示（取自食物自身的 unit，如 100g / 100ml） */
-const unitHint = computed(() => (selectedFood.value ? selectedFood.value.unit : '100g'))
-
-/** 选中食物在结果列表中的高亮样式（视觉等价于 .seg-item.is-active） */
-const activePickStyle = { background: '#fff1e6', boxShadow: 'inset 0 0 0 2px #ffc59b' }
-
-/** 分类 → 标签配色映射（保证每个分类都有稳定的浅色标签） */
-const CATEGORY_THEME = {
-  主食: 'yellow',
-  肉蛋: 'orange',
-  蔬菜: 'green',
-  水果: 'cyan',
-  乳品: 'blue',
-  豆制品: 'green',
-  坚果: 'orange',
-  饮品: 'blue',
-  零食: 'purple',
-  快餐: 'purple'
-}
-/** 取分类标签配色（带兜底） */
-function categoryTheme(category) {
-  return CATEGORY_THEME[category] || 'blue'
-}
-
 /** 选择食物 */
 function pickFood(food) {
   form.foodId = food.id
+}
+
+/** 从时间轴打开添加抽屉，并自动带入目标餐段。 */
+function openAddDrawer(mealType = form.mealType) {
+  form.mealType = mealType
+  expandedMeal.value = mealType
+  drawerOpen.value = true
+}
+
+function closeDrawer() {
+  drawerOpen.value = false
 }
 /** 切换分类筛选 */
 function pickCategory(category) {
@@ -188,34 +173,23 @@ function addRecord() {
     return
   }
   showToast(`已添加到${record.mealType}：${record.emoji}${record.name} ${amountText(record)}`)
+  celebrateStars()
   // 重置：食物选择清空，餐段 / 时间保留
   form.foodId = ''
   form.keyword = ''
   form.category = '全部'
   form.grams = 100
+  drawerOpen.value = false
 }
 
-/* =================================================================
- * 三、今日四餐分组数据
- * ================================================================= */
-/** 四个餐段的完整数据（记录列表 + 该餐营养合计 + 配色主题） */
-const meals = computed(() =>
-  MEAL_TYPES.map((type) => {
-    const records = dietStore.mealGroups[type] || []
-    const summary = sumNutrition(records)
-    return {
-      type,
-      emoji: MEAL_EMOJI[type],
-      theme: MEAL_THEME[type],
-      records,
-      summary: { ...summary, calories: Math.round(summary.calories) }
-    }
-  })
-)
-
 /** 删除今日的一条记录（历史记录不提供删除入口） */
-function removeRecord(id) {
-  if (!window.confirm('确认删除这条饮食记录吗？')) return
+async function removeRecord(id) {
+  const ok = await confirm({
+    title: '删除这条饮食记录？',
+    message: '删除后该条记录的营养数据会从今日合计中扣除。',
+    confirmText: '删除'
+  })
+  if (!ok) return
   dietStore.removeRecord(id)
   showToast('已删除该条记录 🗑️')
 }
@@ -236,9 +210,7 @@ const waterPercent = computed(() => Math.min(100, Math.round(waterRatio.value * 
 const waterStatus = computed(() => (waterRatio.value >= 0.8 ? 'ok' : 'low'))
 /** 饮水提示文案 */
 const waterHint = computed(() =>
-  waterRatio.value >= 0.8
-    ? '✅ 饮水量已达标，水合状态良好，继续保持'
-    : '💡 饮水偏少，建议每 1.5 小时补水 200ml'
+  waterRatio.value >= 0.8 ? '✅ 饮水量已达标，水合状态良好，继续保持' : '💡 饮水偏少，建议每 1.5 小时补水 200ml'
 )
 
 /** 自定义设置饮水量 */
@@ -254,12 +226,6 @@ function applyCustomWater() {
 }
 
 /* =================================================================
- * 五、全天营养合计
- * ================================================================= */
-/** 关键数值（预计算为整数，避免模板里做运算） */
-const totalCalories = computed(() => Math.round(dietStore.summary.calories))
-
-/* =================================================================
  * 六、每日历史饮食查看（最近 7 天，含今天）
  * ================================================================= */
 /** 当前选中的历史日期，默认今天 */
@@ -267,7 +233,7 @@ const selectedDate = ref(todayStr())
 
 /** 选中日期的完整数据（来自 historyDays，倒序且含今天） */
 const activeDay = computed(
-  () => dietStore.historyDays.find((d) => d.date === selectedDate.value) || dietStore.historyDays[0] || null
+  () => dietStore.historyDays.find(d => d.date === selectedDate.value) || dietStore.historyDays[0] || null
 )
 
 /** 选中日期是否为「今天」（仅今天允许删除记录） */
@@ -277,13 +243,26 @@ const activeIsToday = computed(() => !!activeDay.value && activeDay.value.date =
 const activeGroups = computed(() => {
   const day = activeDay.value
   if (!day) return []
-  return MEAL_TYPES.map((type) => ({
-    type,
-    emoji: MEAL_EMOJI[type],
-    theme: MEAL_THEME[type],
-    records: (day.records || []).filter((r) => r.mealType === type)
-  }))
+  return MEAL_TYPES.map(type => {
+    const records = (day.records || []).filter(r => r.mealType === type)
+    const summary = sumNutrition(records)
+    return {
+      type,
+      emoji: MEAL_EMOJI[type],
+      records,
+      summary: { ...summary, calories: Math.round(summary.calories) }
+    }
+  })
 })
+
+/** 所选日期顶部摘要；历史日期同样复用时间轴，不再另起历史卡片。 */
+const activeSummary = computed(() => ({
+  calories: activeDay.value?.calories || 0,
+  protein: activeDay.value?.protein || 0,
+  water: activeDay.value?.water || 0,
+  score: activeDay.value?.score || 0,
+  target: activeDay.value?.target || dietStore.targets.calories
+}))
 
 /* =================================================================
  * 七、用户档案（用于顶部展示用户昵称，保持页面间一致性）
@@ -292,419 +271,836 @@ const nickname = computed(() => userStore.profile.nickname)
 </script>
 
 <template>
-  <!-- 根容器加 stagger：直接子元素依次淡入 -->
-  <div class="stagger">
-    <!-- ============ 页面标题 + 右侧操作区 ============ -->
+  <div class="diet-timeline stagger">
     <PageHeader>
       <template #extra>
-        <span class="chip">
-          <span aria-hidden="true">🧑</span>
-          <span class="chip-strong">{{ nickname }}</span>
-          <span class="tx-muted">今日已记录 {{ dietStore.records.length }} 条</span>
-        </span>
-        <button class="btn btn-ghost" @click="showForm = !showForm">
-          <span aria-hidden="true">📝</span>
-          {{ showForm ? '隐藏添加表单' : '显示添加表单' }}
-        </button>
-        <button class="btn btn-primary" @click="router.push('/dashboard')">
-          <span aria-hidden="true">📊</span>去大屏看趋势
-        </button>
+        <span class="timeline-count">{{ nickname }} · 今日 {{ dietStore.records.length }} 条</span>
+        <button class="btn btn-ghost" type="button" @click="waterOpen = !waterOpen">💧 记录饮水</button>
+        <button class="btn btn-primary" type="button" @click="openAddDrawer()">＋ 添加饮食</button>
       </template>
     </PageHeader>
 
-    <!-- ============ 添加记录（mc-green 整行卡片）============ -->
-    <MacaronCard
-      v-show="showForm"
-      class="mb-5"
-      theme="green"
-      emoji="➕"
-      title="添加一条饮食记录"
-      sub="选择餐段 → 搜索食物 → 填写分量；营养值按分量实时换算"
-    >
-      <div class="grid grid-cols-12 gap-5">
-        <!-- 左：餐段 + 时间 -->
-        <div class="col-span-3">
-          <div class="field-label">🍽️ 选择餐段</div>
-          <div class="seg">
-            <button
-              v-for="type in MEAL_TYPES"
-              :key="type"
-              class="seg-item"
-              :class="{ 'is-active': form.mealType === type }"
-              @click="form.mealType = type"
-            >
-              {{ MEAL_EMOJI[type] }} {{ type }}
-            </button>
-          </div>
-
-          <div class="mt-4">
-            <div class="field-label">⏰ 记录时间</div>
-            <input v-model="form.time" type="time" class="field" />
-          </div>
-
-          <div class="mt-4">
-            <div class="field-label">⚖️ 分量（{{ unitHint }} 基准）</div>
-            <input v-model.number="form.grams" type="number" min="1" class="field" placeholder="请输入克数 / 毫升" />
-            <div class="seg mt-2">
-              <button v-for="g in [50, 100, 150, 200, 300]" :key="g" class="btn btn-ghost btn-xs" @click="setGrams(g)">
-                {{ g }}g
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 中：食物搜索 + 分类筛选 + 结果列表 -->
-        <div class="col-span-5">
-          <div class="field-label">🔍 搜索食物</div>
-          <input v-model="form.keyword" class="field" placeholder="输入食物名称 / 关键词，如：鸡胸、米饭、milk" />
-
-          <!-- 分类筛选：一排可点选的 .tag -->
-          <div class="mt-3 flex flex-wrap gap-2">
-            <button
-              v-for="category in FOOD_CATEGORIES"
-              :key="category"
-              class="tag"
-              :class="form.category === category ? 'tag-orange' : ''"
-              @click="pickCategory(category)"
-            >
-              {{ category }}
-            </button>
-          </div>
-
-          <!-- 结果条数提示：让「全库共多少条 / 当前显示多少」对用户可见 -->
-          <div class="mt-2.5 flex items-center justify-between text-[11px] tx-muted">
-            <span>
-              共 <b class="num tx-sub">{{ matchedFoods.length }}</b> 条
-              <template v-if="hasMore">，已显示 {{ searchResults.length }} 条</template>
-            </span>
-            <button v-if="form.keyword || form.category !== '全部'" type="button" class="font-semibold tx-sub hover:text-orange-500" @click="resetFilter">
-              重置筛选
-            </button>
-          </div>
-
-          <!-- 结果列表：两列网格展示（移动端单列），点击选中 -->
-          <div class="scroll-area mt-2 max-h-[300px] pr-1">
-            <div class="grid grid-cols-1 gap-1.5 lg:grid-cols-2">
-              <div
-                v-for="food in searchResults"
-                :key="food.id"
-                class="list-item cursor-pointer"
-                :style="form.foodId === food.id ? activePickStyle : {}"
-                @click="pickFood(food)"
-              >
-                <span class="emoji-badge" aria-hidden="true">{{ food.emoji }}</span>
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-1.5">
-                    <span class="truncate text-[13px] font-bold tx-main">{{ food.name }}</span>
-                    <span class="tag shrink-0" :class="`tag-${categoryTheme(food.category)}`">{{ food.category }}</span>
-                  </div>
-                  <div class="num text-[11px] tx-muted">每 {{ food.unit }} ≈ {{ food.calories }} kcal</div>
-                </div>
-                <span v-if="form.foodId === food.id" class="shrink-0 text-[13px]">✅</span>
-              </div>
-
-              <!-- 展开更多：逐页追加，保证整库 915 条都能浏览到（跨两列） -->
-              <button v-if="hasMore" type="button" class="more-btn lg:col-span-2" @click="loadMore">
-                展开更多（还有 {{ matchedFoods.length - searchResults.length }} 条）
-              </button>
-
-              <div v-if="!searchResults.length" class="lg:col-span-2">
-                <EmptyState
-                  emoji="🔍"
-                  text="没有找到匹配的食物"
-                  sub="试试更短的关键词，或切换分类"
-                  height="120px"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 右：选中食物 + 实时预估 + 添加按钮 -->
-        <div class="col-span-4">
-          <div class="field-label">🍱 已选食物</div>
-          <div class="soft-panel">
-            <div v-if="selectedFood" class="flex items-center gap-3">
-              <span class="emoji-badge-lg" aria-hidden="true">{{ selectedFood.emoji }}</span>
-              <div class="min-w-0">
-                <div class="truncate text-[14px] font-bold tx-main">{{ selectedFood.name }}</div>
-                <div class="num text-[11px] tx-muted">
-                  每 {{ selectedFood.unit }}：{{ selectedFood.calories }} kcal · 蛋白 {{ selectedFood.protein }}g
-                </div>
-              </div>
-            </div>
-            <div v-else class="flex items-center gap-2 text-[12px] tx-muted">
-              <span aria-hidden="true">👈</span>请从左侧搜索结果中选择一个食物
-            </div>
-          </div>
-
-          <div class="mt-3">
-            <div class="field-label">✨ 实时营养预估</div>
-            <div class="soft-panel">
-              <p v-if="previewNutrition" class="text-[12px] tx-sub">
-                将添加
-                <span class="num font-bold tx-main">≈ {{ previewNutrition.calories }} kcal</span>
-                · 蛋白 <span class="num font-bold tx-main">{{ previewNutrition.protein }}g</span>
-                · 脂肪 <span class="num font-bold tx-main">{{ previewNutrition.fat }}g</span>
-                · 碳水 <span class="num font-bold tx-main">{{ previewNutrition.carb }}g</span>
-              </p>
-              <p v-else class="text-[12px] tx-muted">选中食物并填写分量后，这里会实时预估营养值 ✨</p>
-            </div>
-          </div>
-
-          <button class="btn btn-green mt-4 w-full" :disabled="!selectedFood" @click="addRecord">
-            <span aria-hidden="true">➕</span>添加到记录
+    <main class="timeline-shell">
+      <header class="timeline-toolbar">
+        <div class="date-switcher" aria-label="选择记录日期">
+          <button
+            v-for="day in dietStore.historyDays"
+            :key="day.date"
+            type="button"
+            :class="{ active: day.date === selectedDate }"
+            @click="selectedDate = day.date"
+          >
+            <span>{{ day.label }}</span
+            ><small>{{ day.weekday }}</small>
           </button>
         </div>
-      </div>
-    </MacaronCard>
+        <RouterLink to="/dashboard" class="timeline-link">查看长期趋势 →</RouterLink>
+      </header>
 
-    <!-- ============ 今日四餐分组展示 ============ -->
-    <div class="stagger grid-cards mb-5 grid-cols-2">
-      <MacaronCard
-        v-for="meal in meals"
-        :key="meal.type"
-        :theme="meal.theme"
-        :emoji="meal.emoji"
-        :title="`${meal.type}记录`"
-        :sub="`共 ${meal.records.length} 项 · 点击上方表单继续添加`"
-      >
-        <template #extra>
-          <div class="text-right">
-            <div class="num text-[20px] font-extrabold tx-main">{{ meal.summary.calories }}</div>
-            <div class="text-[11px] tx-muted">kcal</div>
+      <section class="day-summary">
+        <div>
+          <p class="section-eyebrow">{{ activeIsToday ? '今天' : formatCN(selectedDate) }}的饮食节奏</p>
+          <h2>
+            <span class="num">{{ activeSummary.calories }}</span> kcal
+          </h2>
+          <p>共 {{ activeDay?.recordCount || 0 }} 条记录 · 健康评分 {{ activeSummary.score }}</p>
+        </div>
+        <div class="summary-metrics">
+          <div>
+            <span>蛋白质</span><strong class="num">{{ activeSummary.protein }}g</strong>
           </div>
-        </template>
+          <div>
+            <span>饮水</span><strong class="num">{{ activeSummary.water }}ml</strong>
+          </div>
+          <div>
+            <span>目标热量</span><strong class="num">{{ activeSummary.target }} kcal</strong>
+          </div>
+        </div>
+      </section>
 
-        <EmptyState
-          v-if="!meal.records.length"
-          emoji="🍽️"
-          :text="`还没记录${meal.type}，点上方添加`"
-          sub="记录后会实时累加到全天营养合计"
-          height="130px"
-        />
+      <Transition name="panel-reveal">
+        <section v-if="waterOpen && activeIsToday" class="water-strip">
+          <div>
+            <strong>今日饮水 {{ dietStore.water }} / {{ dietStore.targets.water }} ml</strong>
+            <p>{{ waterHint }}</p>
+          </div>
+          <div class="water-progress">
+            <ProgressBar :percent="waterPercent" :status="waterStatus" :show-label="false" />
+          </div>
+          <div class="water-actions">
+            <button type="button" @click="dietStore.addWater(200)">＋200ml</button>
+            <button type="button" @click="dietStore.addWater(300)">＋300ml</button>
+            <input v-model.number="customWater" type="number" min="0" placeholder="自定义 ml" />
+            <button type="button" @click="applyCustomWater">设置</button>
+          </div>
+        </section>
+      </Transition>
 
-        <div v-else class="stagger space-y-1">
-          <div v-for="record in meal.records" :key="record.id" class="list-item">
-            <span class="emoji-badge" aria-hidden="true">{{ record.emoji }}</span>
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="truncate text-[13px] font-bold tx-main">{{ record.name }}</span>
-                <span class="tag">{{ amountText(record) }}</span>
+      <section class="meal-timeline" aria-label="当日餐次时间轴">
+        <article
+          v-for="group in activeGroups"
+          :key="group.type"
+          class="meal-event"
+          :class="{ expanded: expandedMeal === group.type }"
+        >
+          <div class="meal-axis">
+            <span>{{ group.emoji }}</span>
+          </div>
+          <div class="meal-content">
+            <button
+              class="meal-summary-button"
+              type="button"
+              @click="expandedMeal = expandedMeal === group.type ? '' : group.type"
+            >
+              <span class="meal-title"
+                ><strong>{{ group.type }}</strong
+                ><small>{{ group.records.length }} 项</small></span
+              >
+              <span class="meal-preview">{{
+                group.records.length ? group.records.map(r => r.name).join('、') : '尚未记录'
+              }}</span>
+              <span class="meal-total num">{{ group.summary.calories }} kcal</span>
+              <span class="meal-chevron">{{ expandedMeal === group.type ? '收起' : '展开' }}</span>
+            </button>
+
+            <Transition name="panel-reveal">
+              <div v-if="expandedMeal === group.type" class="meal-detail">
+                <div v-if="group.records.length" class="record-list">
+                  <div v-for="record in group.records" :key="record.id" class="record-row">
+                    <span class="record-emoji" aria-hidden="true">{{ record.emoji }}</span>
+                    <div>
+                      <strong>{{ record.name }}</strong>
+                      <p>{{ amountText(record) }} · {{ record.time }}</p>
+                    </div>
+                    <div class="record-nutrients num">
+                      <span>{{ record.nutrition.calories }} kcal</span
+                      ><small>蛋白 {{ record.nutrition.protein }}g · 碳水 {{ record.nutrition.carb }}g</small>
+                    </div>
+                    <button
+                      v-if="activeIsToday"
+                      type="button"
+                      class="delete-button"
+                      aria-label="删除记录"
+                      @click="removeRecord(record.id)"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
+                <p v-else class="meal-empty-copy">这个餐次还没有记录。</p>
+                <footer class="meal-detail-footer">
+                  <span
+                    >合计：蛋白 {{ group.summary.protein }}g · 脂肪 {{ group.summary.fat }}g · 碳水
+                    {{ group.summary.carb }}g</span
+                  >
+                  <button v-if="activeIsToday" type="button" class="add-inline" @click="openAddDrawer(group.type)">
+                    ＋ 添加{{ group.type }}食物
+                  </button>
+                </footer>
               </div>
-              <div class="num mt-1 flex flex-wrap gap-x-3 text-[11px] tx-muted">
-                <span>🔥 {{ record.nutrition.calories }} kcal</span>
-                <span>🥩 蛋白 {{ record.nutrition.protein }}g</span>
-                <span>🥑 脂肪 {{ record.nutrition.fat }}g</span>
-                <span>🍚 碳水 {{ record.nutrition.carb }}g</span>
-              </div>
-            </div>
-            <div class="flex shrink-0 items-center gap-2">
-              <span class="chip px-2 py-0.5 num text-[11px]">{{ record.time }}</span>
-              <button class="btn btn-xs btn-danger-soft" @click="removeRecord(record.id)">
-                <span aria-hidden="true">🗑️</span>
+            </Transition>
+          </div>
+        </article>
+      </section>
+
+      <section class="daily-progress">
+        <div class="daily-progress-head">
+          <div>
+            <h3>全天营养进度</h3>
+            <p>保留必要数据，异常项会自动突出</p>
+          </div>
+          <RouterLink to="/report">查看完整分析 →</RouterLink>
+        </div>
+        <div class="nutrient-lines">
+          <div
+            v-for="item in dietStore.progressList"
+            :key="item.key"
+            class="nutrient-line"
+            :class="{ alert: item.status === 'over' || item.status === 'severe' }"
+          >
+            <span>{{ item.emoji }} {{ item.label }}</span>
+            <ProgressBar :percent="item.percent" :status="item.status" :show-label="false" />
+            <strong class="num">{{ item.value }} / {{ item.target }} {{ item.unit }}</strong>
+            <StatusBadge size="sm" :status="item.status" />
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <Transition name="drawer-fade">
+      <div v-if="drawerOpen" class="drawer-backdrop" @click="closeDrawer"></div>
+    </Transition>
+    <Transition name="drawer-slide">
+      <aside v-if="drawerOpen" class="add-drawer" aria-label="添加饮食记录">
+        <header class="drawer-head">
+          <div>
+            <p class="section-eyebrow">快速记录</p>
+            <h2>添加一条饮食</h2>
+          </div>
+          <button type="button" @click="closeDrawer">关闭</button>
+        </header>
+
+        <div class="drawer-scroll">
+          <section class="drawer-section">
+            <label>餐次与时间</label>
+            <div class="drawer-meals">
+              <button
+                v-for="type in MEAL_TYPES"
+                :key="type"
+                type="button"
+                :class="{ active: form.mealType === type }"
+                @click="form.mealType = type"
+              >
+                {{ MEAL_EMOJI[type] }} {{ type }}
               </button>
             </div>
-          </div>
-        </div>
+            <input v-model="form.time" type="time" class="drawer-input compact" />
+          </section>
 
-        <template #footer>
-          <div class="divider my-3"></div>
-          <div class="num flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] tx-sub">
-            <span>🔥 热量 {{ meal.summary.calories }} kcal</span>
-            <span>🥩 蛋白 {{ meal.summary.protein }}g</span>
-            <span>🥑 脂肪 {{ meal.summary.fat }}g</span>
-            <span>🍚 碳水 {{ meal.summary.carb }}g</span>
-            <span>🌿 纤维 {{ meal.summary.fiber }}g</span>
-          </div>
-        </template>
-      </MacaronCard>
-    </div>
-
-    <!-- ============ 饮水记录 + 全天营养合计 ============ -->
-    <div class="stagger grid-cards mb-5 grid-cols-5">
-      <!-- 饮水记录（mc-blue） -->
-      <MacaronCard class="col-span-2" theme="blue" emoji="💧" title="饮水记录" sub="少量多次补水更利于吸收">
-        <div class="flex items-end gap-2">
-          <span class="num text-[34px] font-extrabold leading-none tx-main">{{ dietStore.water }}</span>
-          <span class="num pb-1 text-[13px] tx-muted">/ {{ dietStore.targets.water }} ml</span>
-          <StatusBadge class="ml-auto" :status="waterStatus" />
-        </div>
-
-        <ProgressBar class="mt-3" :percent="waterPercent" :status="waterStatus" />
-
-        <p class="mt-2 text-[12px]" :class="waterStatus === 'ok' ? 'tx-ok' : 'tx-low'">{{ waterHint }}</p>
-
-        <div class="seg mt-3">
-          <button class="btn btn-ghost btn-xs" @click="dietStore.addWater(200)">+200ml</button>
-          <button class="btn btn-ghost btn-xs" @click="dietStore.addWater(300)">+300ml</button>
-          <button class="btn btn-ghost btn-xs" @click="dietStore.addWater(500)">+500ml</button>
-          <button class="btn btn-ghost btn-xs" @click="dietStore.addWater(-100)">−100ml</button>
-        </div>
-
-        <div class="mt-3 flex items-center gap-2">
-          <input v-model.number="customWater" type="number" min="0" class="field" placeholder="自定义饮水量（ml）" />
-          <button class="btn btn-ghost shrink-0" @click="applyCustomWater">设置</button>
-        </div>
-      </MacaronCard>
-
-      <!-- 全天营养合计（mc-yellow） -->
-      <MacaronCard class="col-span-3" theme="yellow" emoji="🥗" title="全天营养合计" sub="自动对比每日推荐目标">
-        <div class="grid grid-cols-4 gap-3">
-          <StatTile
-            theme="orange"
-            emoji="🔥"
-            label="总热量"
-            :value="totalCalories"
-            unit="kcal"
-            :sub="`目标 ${dietStore.targets.calories} kcal`"
-          />
-          <StatTile
-            theme="green"
-            emoji="🥩"
-            label="蛋白质"
-            :value="dietStore.summary.protein"
-            unit="g"
-            :sub="`目标 ${dietStore.targets.protein} g`"
-          />
-          <StatTile
-            theme="yellow"
-            emoji="🥑"
-            label="脂肪"
-            :value="dietStore.summary.fat"
-            unit="g"
-            :sub="`目标 ${dietStore.targets.fat} g`"
-          />
-          <StatTile
-            theme="cyan"
-            emoji="🍚"
-            label="碳水"
-            :value="dietStore.summary.carb"
-            unit="g"
-            :sub="`目标 ${dietStore.targets.carb} g`"
-          />
-        </div>
-
-        <div class="divider my-4"></div>
-
-        <!-- 逐项达标进度：实际值 / 目标值 + 进度条 + 状态标签 -->
-        <div class="space-y-3">
-          <div v-for="item in dietStore.progressList" :key="item.key">
-            <div class="flex items-center justify-between gap-3">
-              <span class="text-[13px] font-semibold tx-main">
-                <span aria-hidden="true">{{ item.emoji }}</span> {{ item.label }}
-              </span>
-              <div class="flex items-center gap-3">
-                <span class="num text-[12px] tx-muted">
-                  {{ item.value }} / {{ item.target }} {{ item.unit }}
-                </span>
-                <StatusBadge size="sm" :status="item.status" />
-              </div>
+          <section class="drawer-section">
+            <label for="food-search">搜索食物</label>
+            <input id="food-search" v-model="form.keyword" class="drawer-input" placeholder="输入食物名称或关键词" />
+            <div class="category-row">
+              <button
+                v-for="category in FOOD_CATEGORIES"
+                :key="category"
+                type="button"
+                :class="{ active: form.category === category }"
+                @click="pickCategory(category)"
+              >
+                {{ category }}
+              </button>
             </div>
-            <ProgressBar
-              class="mt-1"
-              :percent="item.percent"
-              :status="item.status"
-              :show-label="false"
-              height="8px"
-            />
-          </div>
-        </div>
-      </MacaronCard>
-    </div>
-
-    <!-- ============ 每日历史饮食查看（mc-cyan 整行）============ -->
-    <MacaronCard
-      class="mb-5"
-      theme="cyan"
-      emoji="🗓️"
-      title="每日历史饮食查看"
-      sub="点击日期查看当天明细；历史记录仅供回看，不可删除"
-    >
-      <!-- 日期切换：最近 7 天（含今天） -->
-      <div class="seg">
-        <button
-          v-for="day in dietStore.historyDays"
-          :key="day.date"
-          class="seg-item"
-          :class="{ 'is-active': day.date === selectedDate }"
-          @click="selectedDate = day.date"
-        >
-          <span class="block text-center leading-tight">
-            <span class="block text-[12px]">{{ day.label }}</span>
-            <span class="block text-[10px] opacity-70">{{ day.weekday }}</span>
-            <span class="num block text-[10px] font-bold">{{ day.score }} 分</span>
-          </span>
-        </button>
-      </div>
-
-      <!-- 选中日期的数据概览 -->
-      <template v-if="activeDay">
-        <div class="stagger mt-4 grid grid-cols-4 gap-3">
-          <StatTile theme="orange" emoji="🔥" label="当日热量" :value="activeDay.calories" unit="kcal" :sub="`目标 ${activeDay.target} kcal`" />
-          <StatTile theme="green" emoji="🏆" label="健康评分" :value="activeDay.score" unit="分" :sub="`${activeDay.grade.emoji} ${activeDay.grade.label}`" />
-          <StatTile theme="purple" emoji="📝" label="记录条数" :value="activeDay.recordCount" unit="条" :sub="`覆盖 ${activeDay.mealCount} 个餐段`" />
-          <StatTile theme="blue" emoji="💧" label="饮水量" :value="activeDay.water" unit="ml" :sub="`目标 ${dietStore.targets.water} ml`" />
-        </div>
-
-        <!-- 记录明细：按餐段分组 -->
-        <div v-if="activeDay.recordCount" class="mt-4 grid grid-cols-2 gap-4">
-          <div v-for="group in activeGroups" :key="group.type" class="soft-panel">
-            <div class="mb-2 flex items-center justify-between">
-              <span class="text-[13px] font-bold tx-main">
-                <span aria-hidden="true">{{ group.emoji }}</span> {{ group.type }}
-              </span>
-              <span class="tag" :class="`tag-${group.theme}`">{{ group.records.length }} 项</span>
+            <div class="result-meta">
+              <span>{{ matchedFoods.length }} 条结果</span
+              ><button v-if="form.keyword || form.category !== '全部'" type="button" @click="resetFilter">重置</button>
             </div>
+            <div class="food-results">
+              <button
+                v-for="food in searchResults"
+                :key="food.id"
+                type="button"
+                :class="{ active: form.foodId === food.id }"
+                @click="pickFood(food)"
+              >
+                <span>{{ food.emoji }}</span
+                ><span
+                  ><strong>{{ food.name }}</strong
+                  ><small>{{ food.category }} · {{ food.calories }} kcal/{{ food.unit }}</small></span
+                ><b>{{ form.foodId === food.id ? '✓' : '' }}</b>
+              </button>
+              <button v-if="hasMore" type="button" class="load-more" @click="loadMore">
+                加载更多（剩余 {{ matchedFoods.length - searchResults.length }} 条）
+              </button>
+              <p v-if="!searchResults.length" class="no-results">没有匹配结果，请更换关键词。</p>
+            </div>
+          </section>
 
-            <EmptyState v-if="!group.records.length" emoji="🍽️" text="该餐段无记录" height="70px" />
-
-            <div v-else class="stagger space-y-1">
-              <div v-for="record in group.records" :key="record.id" class="list-item">
-                <span class="emoji-badge" aria-hidden="true">{{ record.emoji }}</span>
-                <div class="min-w-0 flex-1">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <span class="truncate text-[13px] font-bold tx-main">{{ record.name }}</span>
-                    <span class="tag">{{ amountText(record) }}</span>
-                  </div>
-                  <div class="num mt-1 flex flex-wrap gap-x-3 text-[11px] tx-muted">
-                    <span>🔥 {{ record.nutrition.calories }} kcal</span>
-                    <span>🥩 蛋白 {{ record.nutrition.protein }}g</span>
-                    <span>🍚 碳水 {{ record.nutrition.carb }}g</span>
-                  </div>
-                </div>
-                <div class="flex shrink-0 items-center gap-2">
-                  <span class="chip px-2 py-0.5 num text-[11px]">{{ record.time }}</span>
-                  <!-- 仅「今天」允许删除，历史记录不可删除 -->
-                  <button
-                    v-if="activeIsToday"
-                    class="btn btn-xs btn-danger-soft"
-                    @click="removeRecord(record.id)"
-                  >
-                    <span aria-hidden="true">🗑️</span>
-                  </button>
+          <Transition name="panel-reveal">
+            <section v-if="selectedFood" class="drawer-section selected-step">
+              <label>确认分量</label>
+              <div class="selected-food">
+                <span>{{ selectedFood.emoji }}</span>
+                <div>
+                  <strong>{{ selectedFood.name }}</strong>
+                  <p>每 {{ selectedFood.unit }} {{ selectedFood.calories }} kcal</p>
                 </div>
               </div>
-            </div>
-          </div>
+              <div class="amount-row">
+                <button
+                  type="button"
+                  aria-label="减少份量 50"
+                  @click="form.grams = Math.max(1, Number(form.grams) - 50)"
+                >
+                  −</button
+                ><input v-model.number="form.grams" type="number" min="1" /><span>{{
+                  unitText(selectedFood.unit)
+                }}</span
+                ><button type="button" aria-label="增加份量 50" @click="form.grams = Number(form.grams) + 50">＋</button>
+              </div>
+              <div class="quick-amount">
+                <button
+                  v-for="g in [50, 100, 150, 200, 300]"
+                  :key="g"
+                  type="button"
+                  :class="{ active: form.grams === g }"
+                  @click="setGrams(g)"
+                >
+                  {{ g }}{{ unitText(selectedFood.unit) }}
+                </button>
+              </div>
+              <div v-if="previewNutrition" class="nutrition-preview">
+                <span>预计增加</span><strong class="num">{{ previewNutrition.calories }} kcal</strong
+                ><small
+                  >蛋白 {{ previewNutrition.protein }}g · 脂肪 {{ previewNutrition.fat }}g · 碳水
+                  {{ previewNutrition.carb }}g</small
+                >
+              </div>
+            </section>
+          </Transition>
         </div>
+        <footer class="drawer-footer">
+          <button class="btn btn-primary" type="button" :disabled="!selectedFood" @click="addRecord">
+            确认加入{{ form.mealType }}
+          </button>
+        </footer>
+      </aside>
+    </Transition>
 
-        <EmptyState
-          v-else
-          emoji="📭"
-          :text="`${formatCN(activeDay.date)}（${weekdayCN(activeDay.date)}）没有饮食记录`"
-          sub="切换到其他日期看看，或回到今天开始记录"
-          height="150px"
-        />
-      </template>
-    </MacaronCard>
-
-    <!-- ============ 轻量 Toast ============ -->
-    <div
-      v-if="toast.visible"
-      class="anim-pop fixed bottom-8 left-1/2 z-50 -translate-x-1/2 rounded-pill bg-accent-green px-5 py-2.5 text-[13px] font-bold text-white shadow-cardHover"
-    >
-      {{ toast.text }}
-    </div>
+    <div v-if="toast.visible" class="timeline-toast">{{ toast.text }}</div>
   </div>
 </template>
+
+<style scoped>
+.timeline-shell {
+  width: min(1100px, 100%);
+  margin: 0 auto;
+  padding: 6px 0 48px;
+}
+.timeline-count {
+  color: var(--tx-sub);
+  font-size: 12px;
+}
+.timeline-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 8px 0 22px;
+  border-bottom: 1px solid var(--line);
+}
+.date-switcher {
+  display: flex;
+  gap: 4px;
+}
+.date-switcher button {
+  min-width: 72px;
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--tx-muted);
+}
+.date-switcher button span,
+.date-switcher button small {
+  display: block;
+}
+.date-switcher button small {
+  font-size: 9px;
+}
+.date-switcher button.active {
+  border-bottom-color: var(--brand);
+  color: var(--brand);
+  font-weight: 800;
+}
+.timeline-link,
+.daily-progress a {
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 700;
+}
+.day-summary {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 30px;
+  padding: 28px 0;
+  border-bottom: 1px solid var(--line);
+}
+.section-eyebrow {
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 800;
+}
+.day-summary h2 {
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 32px;
+}
+.day-summary > div > p:last-child {
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.summary-metrics {
+  display: flex;
+  gap: 34px;
+}
+.summary-metrics div {
+  display: grid;
+  gap: 3px;
+  text-align: right;
+}
+.summary-metrics span {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.summary-metrics strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+.water-strip {
+  display: grid;
+  grid-template-columns: 220px 1fr auto;
+  align-items: center;
+  gap: 24px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.water-strip p {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.water-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.water-actions button,
+.water-actions input {
+  height: 32px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--tx-sub);
+  font-size: 11px;
+}
+.water-actions button {
+  padding: 0 9px;
+}
+.water-actions input {
+  width: 94px;
+  padding: 0 8px;
+}
+.meal-timeline {
+  position: relative;
+  padding: 22px 0;
+}
+.meal-timeline::before {
+  content: '';
+  position: absolute;
+  left: 22px;
+  top: 46px;
+  bottom: 46px;
+  width: 1px;
+  background: var(--line-strong);
+}
+.meal-event {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 15px;
+  position: relative;
+}
+.meal-axis {
+  padding-top: 16px;
+  z-index: 1;
+}
+.meal-axis span {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: #fff;
+  font-size: 19px;
+}
+.meal-event.expanded .meal-axis span {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.meal-content {
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+.meal-summary-button {
+  width: 100%;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr) 92px 42px;
+  align-items: center;
+  gap: 14px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.meal-title {
+  display: grid;
+  gap: 3px;
+}
+.meal-title strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+.meal-title small,
+.meal-preview,
+.meal-chevron {
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.meal-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meal-total {
+  color: var(--ink);
+  font-size: 13px;
+  text-align: right;
+}
+.meal-chevron {
+  text-align: right;
+}
+.meal-detail {
+  padding: 0 0 16px 2px;
+}
+.record-list {
+  border-top: 1px solid var(--line);
+}
+.record-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 190px 42px;
+  align-items: center;
+  gap: 10px;
+  min-height: 60px;
+  border-bottom: 1px solid var(--line);
+}
+.record-emoji {
+  font-size: 19px;
+}
+.record-row strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+.record-row p,
+.record-nutrients small {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.record-nutrients {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  color: var(--tx-sub);
+  font-size: 11px;
+}
+.delete-button {
+  border: 0;
+  background: transparent;
+  color: #bd5555;
+  font-size: 10px;
+}
+.meal-empty-copy {
+  padding: 15px 0;
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.meal-detail-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 12px;
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.add-inline {
+  border: 0;
+  background: transparent;
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 800;
+}
+.daily-progress {
+  padding: 28px 0;
+  border-top: 1px solid var(--line);
+}
+.daily-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 16px;
+}
+.daily-progress-head h3 {
+  color: var(--ink);
+  font-size: 16px;
+}
+.daily-progress-head p {
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.nutrient-lines {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 28px;
+}
+.nutrient-line {
+  display: grid;
+  grid-template-columns: 80px 1fr 116px 54px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.nutrient-line > span,
+.nutrient-line > strong {
+  font-size: 10px;
+}
+.nutrient-line > strong {
+  text-align: right;
+}
+.nutrient-line.alert > span {
+  color: #b45c3a;
+  font-weight: 800;
+}
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(30, 37, 39, 0.26);
+}
+.add-drawer {
+  position: fixed;
+  z-index: 70;
+  top: 0;
+  right: 0;
+  width: 460px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  box-shadow: -18px 0 50px rgba(30, 37, 39, 0.13);
+}
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 26px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-head h2 {
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 21px;
+}
+.drawer-head button {
+  border: 0;
+  background: transparent;
+  color: var(--tx-sub);
+  font-size: 11px;
+}
+.drawer-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 26px 28px;
+}
+.drawer-section {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-section > label {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+.drawer-meals,
+.category-row,
+.quick-amount {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.drawer-meals button,
+.category-row button,
+.quick-amount button {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--tx-sub);
+  font-size: 10px;
+}
+.drawer-meals button.active,
+.category-row button.active,
+.quick-amount button.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 800;
+}
+.drawer-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  outline: 0;
+  font-size: 12px;
+}
+.drawer-input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+.drawer-input.compact {
+  width: 120px;
+  margin-top: 10px;
+}
+.category-row {
+  margin-top: 10px;
+}
+.result-meta {
+  display: flex;
+  justify-content: space-between;
+  margin: 10px 0 6px;
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.result-meta button {
+  border: 0;
+  background: transparent;
+  color: var(--brand);
+}
+.food-results {
+  max-height: 258px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+.food-results > button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 34px 1fr 18px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 6px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+  text-align: left;
+}
+.food-results > button.active {
+  background: var(--brand-soft);
+}
+.food-results strong,
+.food-results small {
+  display: block;
+}
+.food-results strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+.food-results small {
+  color: var(--tx-muted);
+  font-size: 9px;
+}
+.food-results .load-more {
+  display: block;
+  padding: 10px;
+  text-align: center;
+  color: var(--brand);
+  font-size: 10px;
+}
+.no-results {
+  padding: 18px 0;
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.selected-food {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.selected-food > span {
+  font-size: 28px;
+}
+.selected-food strong {
+  font-size: 13px;
+}
+.selected-food p {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.amount-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 14px;
+}
+.amount-row button,
+.amount-row input {
+  height: 36px;
+  border: 1px solid var(--line-strong);
+  background: #fff;
+}
+.amount-row button {
+  width: 36px;
+  border-radius: 5px;
+}
+.amount-row input {
+  width: 90px;
+  padding: 0 8px;
+  text-align: center;
+}
+.amount-row span {
+  color: var(--tx-sub);
+  font-size: 11px;
+}
+.quick-amount {
+  margin-top: 8px;
+}
+.nutrition-preview {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 10px;
+  margin-top: 14px;
+  padding: 12px 0;
+  border-block: 1px solid var(--line);
+  font-size: 11px;
+}
+.nutrition-preview span,
+.nutrition-preview small {
+  color: var(--tx-muted);
+}
+.nutrition-preview small {
+  grid-column: 1/-1;
+}
+.drawer-footer {
+  padding: 16px 26px;
+  border-top: 1px solid var(--line);
+}
+.drawer-footer .btn {
+  width: 100%;
+  min-height: 44px;
+}
+.timeline-toast {
+  position: fixed;
+  z-index: 90;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: #27322f;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.drawer-slide-enter-active,
+.drawer-slide-leave-active {
+  transition: transform 0.28s ease;
+}
+.drawer-slide-enter-from,
+.drawer-slide-leave-to {
+  transform: translateX(100%);
+}
+.drawer-fade-enter-active,
+.drawer-fade-leave-active,
+.panel-reveal-enter-active {
+  transition: opacity 0.25s ease;
+}
+.drawer-fade-enter-from,
+.drawer-fade-leave-to,
+.panel-reveal-enter-from {
+  opacity: 0;
+}
+</style>

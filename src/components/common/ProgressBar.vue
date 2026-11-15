@@ -29,17 +29,9 @@ const width = computed(() => `${Math.min(100, Math.max(0, Math.round(props.perce
 <template>
   <div class="flex items-center gap-3">
     <div class="progress-track flex-1" :style="{ height }">
-      <div
-        class="progress-fill"
-        :class="meta.fillClass"
-        :style="{ width }"
-      ></div>
+      <div class="progress-fill" :class="meta.fillClass" :style="{ width }"></div>
     </div>
-    <span
-      v-if="showLabel"
-      class="num w-12 shrink-0 text-right text-xs font-bold"
-      :style="{ color: meta.color }"
-    >
+    <span v-if="showLabel" class="num w-12 shrink-0 text-right text-xs font-bold" :style="{ color: meta.color }">
       {{ Math.round(percent || 0) }}%
     </span>
   </div>

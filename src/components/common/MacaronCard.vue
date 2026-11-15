@@ -30,10 +30,10 @@ const props = defineProps({
   flex: { type: Boolean, default: false }
 })
 
-/** 组装根节点样式类 */
+/** 组装根节点样式类：卡片恒为纯白 + 极细描边（极简商务），theme 仅用于标题 emoji 徽标点缀 */
 const rootClass = [
   'macaron-card',
-  `mc-${props.theme}`,
+  'mc-white',
   props.hover ? (props.staticScale ? 'card-hover-static' : 'card-hover') : '',
   props.flex ? 'flex flex-col' : ''
 ]
@@ -46,7 +46,7 @@ const rootClass = [
       <slot name="header">
         <div class="min-w-0">
           <h3 class="card-title">
-            <span v-if="emoji" class="emoji-badge" aria-hidden="true">{{ emoji }}</span>
+            <span v-if="emoji" class="emoji-badge" :class="`mc-${theme}`" aria-hidden="true">{{ emoji }}</span>
             <span class="truncate">{{ title }}</span>
           </h3>
           <p v-if="sub" class="card-sub">{{ sub }}</p>

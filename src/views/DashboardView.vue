@@ -1,23 +1,9 @@
 <script setup>
-/**
- * DashboardView · AI 营养数据可视化大屏
- * ------------------------------------------------------------------
- * 页面定位：PC 端「明亮马卡龙风」数据大屏，信息密度高、排布工整，
- *           用 8+ 个 ECharts 图表块 + 概览指标 + 实时时钟，直观展示今日与近一周营养数据。
- *
- * 关键实现：
- *   · 实时时钟：ref + setInterval 每秒刷新，onBeforeUnmount 清理定时器
- *   · 全部图表 option 均为 computed，且一律来自 utils/charts.js 构造函数（配色统一）
- *   · 承载 ECharts 的卡片统一 static-scale（card-hover-static），避免缩放导致画布模糊
- *   · 空数据兜底：无今日记录时用 EmptyState 替代，绝不出现「图表白块」
- */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { useDietStore } from '@/store/diet'
 import { useUserStore } from '@/store/user'
-// 营养素元信息（雷达图指标名）+ 数值取整
 import { NUTRIENT_META, round1 } from '@/utils/nutrition'
-// 图表构造：统一配色，禁止自写 ECharts option
 import {
   macaronPieOption,
   macaronLineOption,
@@ -27,25 +13,78 @@ import {
   MACRO_COLORS,
   PALETTE
 } from '@/utils/charts'
-import { themeByIndex } from '@/utils/theme'
 import { formatCN, weekdayCN, todayStr } from '@/utils/date'
-// 食物库：用于「食物分类摄入占比」的聚合
 import { FOOD_DB } from '@/data/foods'
 import { BRAND } from '@/config/brand'
 
-import MacaronCard from '@/components/common/MacaronCard.vue'
-import StatTile from '@/components/common/StatTile.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
-import ProgressBar from '@/components/common/ProgressBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 
 const dietStore = useDietStore()
 const userStore = useUserStore()
 
-/* ===================================================================
- * 一、实时时钟（每秒刷新，组件卸载时务必清理定时器）
- * =================================================================== */
+const TOPICS = [
+  {
+    key: 'overview',
+    index: '01',
+    label: '今日总览',
+    eyebrow: '供能结构',
+    title: '今天的能量从哪里来',
+    description: '查看三大营养素的供能比例与总热量。'
+  },
+  {
+    key: 'energy',
+    index: '02',
+    label: '能量趋势',
+    eyebrow: '近 7 天',
+    title: '热量摄入趋势',
+    description: '对照每日目标，识别摄入波动。'
+  },
+  {
+    key: 'balance',
+    index: '03',
+    label: '营养均衡',
+    eyebrow: '今日评估',
+    title: '营养素均衡度',
+    description: '观察关键营养素之间的结构差异。'
+  },
+  {
+    key: 'meals',
+    index: '04',
+    label: '餐次结构',
+    eyebrow: '餐次与饮水',
+    title: '餐次热量与饮水分布',
+    description: '定位能量集中在哪一餐，并同步查看饮水。'
+  },
+  {
+    key: 'sources',
+    index: '05',
+    label: '食物来源',
+    eyebrow: '分类聚合',
+    title: '食物分类摄入占比',
+    description: '按食物分类追踪今日热量来源。'
+  },
+  {
+    key: 'score',
+    index: '06',
+    label: '评分走势',
+    eyebrow: '健康表现',
+    title: '近一周健康评分',
+    description: '以 80 分优秀线观察近期变化。'
+  },
+  {
+    key: 'nutrients',
+    index: '07',
+    label: '营养趋势',
+    eyebrow: '长期结构',
+    title: '蛋白质与膳食纤维趋势',
+    description: '比较两项关键营养素的周内变化。'
+  }
+]
+
+const activeTopic = ref('overview')
+const recordsOpen = ref(false)
 const now = ref(new Date())
 let clockTimer = null
 
@@ -56,73 +95,57 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  // 清理定时器，避免内存泄漏与后台空转
-  if (clockTimer) {
-    clearInterval(clockTimer)
-    clockTimer = null
-  }
+  if (clockTimer) clearInterval(clockTimer)
 })
 
-/** 补零：9 → '09' */
-function pad2(n) {
-  return String(n).padStart(2, '0')
+function pad2(value) {
+  return String(value).padStart(2, '0')
 }
 
-/** 时钟文案：YYYY年MM月DD日 周三 HH:mm:ss */
+function ratio(value, target) {
+  if (!Number(target)) return 0
+  return Math.min(100, Math.round((Number(value) / Number(target)) * 100))
+}
+
 const clockText = computed(() => {
-  const d = now.value
-  return `${d.getFullYear()}年${pad2(d.getMonth() + 1)}月${pad2(d.getDate())}日 ${weekdayCN(d)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+  const date = now.value
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
 })
-
-/** 今日日期文案 */
 const dateText = computed(() => `${formatCN(todayStr())} ${weekdayCN(todayStr())}`)
-
-/* ===================================================================
- * 二、核心数据派生
- * =================================================================== */
 const summary = computed(() => dietStore.summary)
 const targets = computed(() => dietStore.targets)
 const records = computed(() => dietStore.records)
-const hasRecords = computed(() => dietStore.records.length > 0)
+const hasRecords = computed(() => records.value.length > 0)
 const score = computed(() => dietStore.report.score)
 const grade = computed(() => dietStore.report.grade)
 const stats = computed(() => dietStore.stats)
+const activeMeta = computed(() => TOPICS.find(topic => topic.key === activeTopic.value) || TOPICS[0])
 
-/** 取某营养素的实际评估状态（供概览指标的状态徽章使用） */
 function nutrientStatus(key) {
-  const item = dietStore.report.items.find((i) => i.key === key)
+  const item = dietStore.report.items.find(entry => entry.key === key)
   return item ? item.status : 'ok'
 }
 
-/* 今日记录流水的展示辅助 */
-/** 记录单位：乳品 / 饮品为 ml，其余为 g */
-function unitText(r) {
-  return String(r.unit || '').includes('ml') ? 'ml' : 'g'
+function unitText(record) {
+  return String(record.unit || '').includes('ml') ? 'ml' : 'g'
 }
 
-/* ===================================================================
- * 三、食物分类聚合（今日记录按 FOOD_DB 分类汇总热量）
- * =================================================================== */
-/** id → 分类 的快速索引 */
-const FOOD_CATEGORY = FOOD_DB.reduce((acc, f) => {
-  acc[f.id] = f.category
-  return acc
+const FOOD_CATEGORY = FOOD_DB.reduce((index, food) => {
+  index[food.id] = food.category
+  return index
 }, {})
 
-/** 今日各食物分类的热量聚合结果（空数据返回空数组，用于兜底判断） */
 const categoryData = computed(() => {
-  const sum = {}
-  records.value.forEach((r) => {
-    const cat = FOOD_CATEGORY[r.foodId] || '其他'
-    sum[cat] = (sum[cat] || 0) + (Number(r.nutrition?.calories) || 0)
+  const totals = {}
+  records.value.forEach(record => {
+    const category = FOOD_CATEGORY[record.foodId] || '其他'
+    totals[category] = (totals[category] || 0) + (Number(record.nutrition?.calories) || 0)
   })
-  return Object.keys(sum).map((name, i) => ({ name, value: round1(sum[name]), color: PALETTE[i % PALETTE.length] }))
+  return Object.keys(totals)
+    .map((name, index) => ({ name, value: round1(totals[name]), color: PALETTE[index % PALETTE.length] }))
+    .sort((a, b) => b.value - a.value)
 })
 
-/* ===================================================================
- * 四、图表配置（全部 computed）
- * =================================================================== */
-/** a. 今日三大营养素摄入占比（碳水橙 / 蛋白绿 / 脂肪黄） */
 const macroPieOption = computed(() =>
   macaronPieOption({
     data: [
@@ -136,18 +159,16 @@ const macroPieOption = computed(() =>
   })
 )
 
-/** b. 近一周热量摄入趋势（含目标参考线 + 面积渐变） */
 const calorieLineOption = computed(() =>
   macaronLineOption({
-    labels: dietStore.weekData.map((d) => d.label),
-    series: [{ name: '热量', data: dietStore.weekData.map((d) => d.calories), color: MACARON.orange, area: true }],
+    labels: dietStore.weekData.map(day => day.label),
+    series: [{ name: '热量', data: dietStore.weekData.map(day => day.calories), color: MACARON.orange, area: true }],
     target: targets.value.calories,
     targetLabel: '目标',
     unit: 'kcal'
   })
 )
 
-/** d. 饮水与三餐热量分布（双轴柱状图） */
 const mealWaterOption = computed(() =>
   macaronMealWaterOption({
     mealLabels: ['早餐', '午餐', '晚餐', '零食'],
@@ -157,18 +178,16 @@ const mealWaterOption = computed(() =>
   })
 )
 
-/** e. 近一周健康评分走势（含 80 分优秀参考线） */
 const scoreLineOption = computed(() =>
   macaronLineOption({
-    labels: dietStore.weekData.map((d) => d.label),
-    series: [{ name: '健康评分', data: dietStore.weekData.map((d) => d.score), color: MACARON.green, area: true }],
+    labels: dietStore.weekData.map(day => day.label),
+    series: [{ name: '健康评分', data: dietStore.weekData.map(day => day.score), color: MACARON.green, area: true }],
     target: 80,
     targetLabel: '优秀线',
     unit: '分'
   })
 )
 
-/** f. 今日食物分类摄入占比（按分类聚合热量） */
 const categoryPieOption = computed(() =>
   macaronPieOption({
     data: categoryData.value,
@@ -178,181 +197,881 @@ const categoryPieOption = computed(() =>
   })
 )
 
-/** g. 营养素均衡度雷达（今日实际摄入） */
 const RADAR_KEYS = ['protein', 'carb', 'fat', 'fiber', 'sugar']
 const radarOption = computed(() => {
-  const indicators = RADAR_KEYS.map((k) => ({
-    name: NUTRIENT_META[k].label,
-    max: Math.round(Math.max(Number(targets.value[k]) || 1, Number(summary.value[k]) || 0) * 1.3)
+  const indicators = RADAR_KEYS.map(key => ({
+    name: NUTRIENT_META[key].label,
+    max: Math.round(Math.max(Number(targets.value[key]) || 1, Number(summary.value[key]) || 0) * 1.3)
   }))
   return macaronRadarOption({
     indicators,
-    series: [{ name: '今日摄入', value: RADAR_KEYS.map((k) => round1(summary.value[k])), color: MACARON.cyan }]
+    series: [{ name: '今日摄入', value: RADAR_KEYS.map(key => round1(summary.value[key])), color: MACARON.cyan }]
   })
 })
 
-/** h. 近一周蛋白质 / 膳食纤维摄入（双折线） */
 const proteinFiberOption = computed(() =>
   macaronLineOption({
-    labels: dietStore.weekData.map((d) => d.label),
+    labels: dietStore.weekData.map(day => day.label),
     series: [
-      { name: '蛋白质', data: dietStore.weekData.map((d) => d.protein), color: MACARON.green },
-      { name: '膳食纤维', data: dietStore.weekData.map((d) => d.fiber), color: MACARON.cyan }
+      { name: '蛋白质', data: dietStore.weekData.map(day => day.protein), color: MACARON.green },
+      { name: '膳食纤维', data: dietStore.weekData.map(day => day.fiber), color: MACARON.cyan }
     ],
     unit: 'g'
   })
 )
+
+const chartOptions = computed(() => ({
+  overview: macroPieOption.value,
+  energy: calorieLineOption.value,
+  balance: radarOption.value,
+  meals: mealWaterOption.value,
+  sources: categoryPieOption.value,
+  score: scoreLineOption.value,
+  nutrients: proteinFiberOption.value
+}))
+
+function readableAxis(axis) {
+  if (!axis) return axis
+  if (Array.isArray(axis)) return axis.map(readableAxis)
+  return {
+    ...axis,
+    axisLabel: { ...(axis.axisLabel || {}), fontSize: 13 },
+    nameTextStyle: { ...(axis.nameTextStyle || {}), fontSize: 12 }
+  }
+}
+
+function readableChartOption(option) {
+  return {
+    ...option,
+    tooltip: option.tooltip
+      ? { ...option.tooltip, textStyle: { ...(option.tooltip.textStyle || {}), fontSize: 13 } }
+      : option.tooltip,
+    legend: option.legend
+      ? { ...option.legend, textStyle: { ...(option.legend.textStyle || {}), fontSize: 13 }, itemGap: 20 }
+      : option.legend,
+    title: option.title
+      ? {
+          ...option.title,
+          textStyle: { ...(option.title.textStyle || {}), fontSize: 26 },
+          subtextStyle: { ...(option.title.subtextStyle || {}), fontSize: 13 }
+        }
+      : option.title,
+    xAxis: readableAxis(option.xAxis),
+    yAxis: readableAxis(option.yAxis),
+    radar: option.radar
+      ? { ...option.radar, axisName: { ...(option.radar.axisName || {}), fontSize: 13 } }
+      : option.radar
+  }
+}
+
+const activeOption = computed(() => readableChartOption(chartOptions.value[activeTopic.value]))
+const activeChartEmpty = computed(
+  () =>
+    (activeTopic.value === 'overview' && !hasRecords.value) ||
+    (activeTopic.value === 'sources' && !categoryData.value.length)
+)
+
+const metricItems = computed(() =>
+  [
+    {
+      key: 'calories',
+      label: '今日热量',
+      value: Math.round(summary.value.calories),
+      unit: 'kcal',
+      target: targets.value.calories,
+      status: nutrientStatus('calories')
+    },
+    {
+      key: 'protein',
+      label: '蛋白质',
+      value: round1(summary.value.protein),
+      unit: 'g',
+      target: targets.value.protein,
+      status: nutrientStatus('protein')
+    },
+    {
+      key: 'fiber',
+      label: '膳食纤维',
+      value: round1(summary.value.fiber),
+      unit: 'g',
+      target: targets.value.fiber,
+      status: nutrientStatus('fiber')
+    },
+    {
+      key: 'sugar',
+      label: '糖分',
+      value: round1(summary.value.sugar),
+      unit: 'g',
+      target: targets.value.sugar,
+      status: nutrientStatus('sugar')
+    },
+    {
+      key: 'sodium',
+      label: '钠',
+      value: Math.round(summary.value.sodium),
+      unit: 'mg',
+      target: targets.value.sodium,
+      status: nutrientStatus('sodium')
+    },
+    {
+      key: 'water',
+      label: '饮水',
+      value: dietStore.water,
+      unit: 'ml',
+      target: targets.value.water,
+      status: nutrientStatus('water')
+    },
+    {
+      key: 'score',
+      label: '今日评分',
+      value: score.value,
+      unit: '分',
+      target: 80,
+      status: score.value >= 80 ? 'ok' : 'low'
+    },
+    {
+      key: 'week',
+      label: '本周均分',
+      value: stats.value.avgScore,
+      unit: '分',
+      target: 80,
+      status: stats.value.avgScore >= 80 ? 'ok' : 'low'
+    }
+  ].map(item => ({ ...item, percent: ratio(item.value, item.target) }))
+)
+
+const weekCalories = computed(() => dietStore.weekData.map(day => Number(day.calories) || 0))
+const highestMealIndex = computed(() => dietStore.mealCalories.indexOf(Math.max(...dietStore.mealCalories)))
+const highestMeal = computed(() => ['早餐', '午餐', '晚餐', '零食'][highestMealIndex.value] || '暂无')
+const highestMealCalories = computed(() => dietStore.mealCalories[highestMealIndex.value] || 0)
+const topCategory = computed(() => categoryData.value[0] || { name: '暂无', value: 0 })
+
+const topicFacts = computed(() => {
+  const facts = {
+    overview: [
+      {
+        label: '今日总热量',
+        value: `${Math.round(summary.value.calories)} kcal`,
+        note: `目标 ${targets.value.calories} kcal`
+      },
+      { label: '蛋白质', value: `${round1(summary.value.protein)} g`, note: `目标 ${targets.value.protein} g` },
+      { label: '健康评分', value: `${score.value} 分`, note: grade.value.label }
+    ],
+    energy: [
+      { label: '本周最高', value: `${Math.max(...weekCalories.value)} kcal`, note: '单日摄入峰值' },
+      { label: '本周最低', value: `${Math.min(...weekCalories.value)} kcal`, note: '单日摄入低点' },
+      { label: '日均热量', value: `${stats.value.avgCalories} kcal`, note: `目标 ${targets.value.calories} kcal` }
+    ],
+    balance: [
+      {
+        label: '达标项目',
+        value: `${dietStore.progressList.filter(item => item.status === 'ok').length} 项`,
+        note: `共 ${dietStore.progressList.length} 项`
+      },
+      { label: '膳食纤维', value: `${round1(summary.value.fiber)} g`, note: `目标 ${targets.value.fiber} g` },
+      { label: '糖分', value: `${round1(summary.value.sugar)} g`, note: `参考 ${targets.value.sugar} g` }
+    ],
+    meals: [
+      { label: '热量最高餐次', value: highestMeal.value, note: `${Math.round(highestMealCalories.value)} kcal` },
+      { label: '今日饮水', value: `${dietStore.water} ml`, note: `目标 ${targets.value.water} ml` },
+      { label: '记录数量', value: `${records.value.length} 条`, note: '今日饮食流水' }
+    ],
+    sources: [
+      { label: '主要来源', value: topCategory.value.name, note: `${Math.round(topCategory.value.value)} kcal` },
+      { label: '食物分类', value: `${categoryData.value.length} 类`, note: '根据今日记录聚合' },
+      { label: '记录数量', value: `${records.value.length} 条`, note: '点击下方查看流水' }
+    ],
+    score: [
+      { label: '今日评分', value: `${score.value} 分`, note: grade.value.label },
+      { label: '本周平均', value: `${stats.value.avgScore} 分`, note: `近 ${stats.value.days} 天` },
+      { label: '本周最高', value: `${stats.value.bestScore} 分`, note: formatCN(stats.value.bestDate) }
+    ],
+    nutrients: [
+      { label: '平均蛋白质', value: `${stats.value.avgProtein} g`, note: '近 7 天' },
+      { label: '平均膳食纤维', value: `${stats.value.avgFiber} g`, note: '近 7 天' },
+      { label: '有效记录', value: `${stats.value.days} 天`, note: '趋势数据范围' }
+    ]
+  }
+  return facts[activeTopic.value] || facts.overview
+})
+
+const attentionItems = computed(() => {
+  const issues = dietStore.progressList.filter(item => item.status !== 'ok')
+  return (issues.length ? issues : dietStore.progressList).slice(0, 4)
+})
 </script>
 
 <template>
-  <div class="stagger flex flex-col gap-5">
-    <!-- ================= 顶部标题区：大标题 + 实时时钟 + 用户 / 评分 chip ================= -->
-    <header class="flex items-center justify-between gap-6">
-      <div class="flex items-center gap-3.5">
-        <span class="emoji-badge-lg mc-blue anim-float text-[30px]" aria-hidden="true">🥗</span>
-        <div>
-          <h1 class="page-title">AI 营养数据可视化大屏</h1>
-          <p class="page-desc">🍽️ 实时联动今日饮食记录 · ECharts 多维度营养洞察</p>
-        </div>
+  <div class="dashboard-shell">
+    <header class="dashboard-head">
+      <div>
+        <p class="dashboard-kicker">AI NUTRITION COMMAND CENTER</p>
+        <h1>营养数据指挥舱</h1>
+        <p>聚焦今日状态，按主题探索营养变化</p>
       </div>
-      <div class="flex shrink-0 items-center gap-2.5">
-        <span class="chip chip-strong num">⏱️ {{ clockText }}</span>
-        <span class="chip">{{ userStore.profile.avatar }} {{ userStore.profile.nickname }}</span>
-        <span class="chip">
-          <span aria-hidden="true">{{ grade.emoji }}</span>
-          今日健康评分
-          <b class="num" :style="{ color: grade.color }">{{ score }}</b>
-          <span class="tx-muted">/ 100</span>
-        </span>
+      <div class="live-context">
+        <span class="live-dot" aria-hidden="true"></span>
+        <div>
+          <small>{{ dateText }}</small
+          ><strong class="num">{{ clockText }}</strong>
+        </div>
+        <div>
+          <small>当前档案</small><strong>{{ userStore.profile.avatar }} {{ userStore.profile.nickname }}</strong>
+        </div>
+        <div class="score-context">
+          <small>健康评分</small><strong class="num" :style="{ color: grade.color }">{{ score }}<em>/100</em></strong>
+        </div>
       </div>
     </header>
 
-    <!-- ================= 概览指标行：8 个数据小卡（按索引循环配色） ================= -->
-    <div class="stagger grid grid-cols-4 gap-5">
-      <StatTile :theme="themeByIndex(0)" label="今日热量" emoji="🔥" :value="Math.round(summary.calories)" unit="kcal">
-        <StatusBadge :status="nutrientStatus('calories')" size="sm" />
-      </StatTile>
-      <StatTile :theme="themeByIndex(1)" label="蛋白质" emoji="🥩" :value="round1(summary.protein)" unit="g">
-        <StatusBadge :status="nutrientStatus('protein')" size="sm" />
-      </StatTile>
-      <StatTile :theme="themeByIndex(2)" label="膳食纤维" emoji="🌿" :value="round1(summary.fiber)" unit="g">
-        <StatusBadge :status="nutrientStatus('fiber')" size="sm" />
-      </StatTile>
-      <StatTile :theme="themeByIndex(3)" label="糖分" emoji="🍬" :value="round1(summary.sugar)" unit="g">
-        <StatusBadge :status="nutrientStatus('sugar')" size="sm" />
-      </StatTile>
-      <StatTile :theme="themeByIndex(4)" label="钠" emoji="🧂" :value="Math.round(summary.sodium)" unit="mg">
-        <StatusBadge :status="nutrientStatus('sodium')" size="sm" />
-      </StatTile>
-      <StatTile :theme="themeByIndex(5)" label="饮水" emoji="💧" :value="dietStore.water" unit="ml">
-        <StatusBadge :status="nutrientStatus('water')" size="sm" />
-      </StatTile>
-      <StatTile
-        :theme="themeByIndex(6)"
-        label="今日健康评分"
-        emoji="🏆"
-        :value="score"
-        unit="分"
-        :color="grade.color"
-        :sub="`等级：${grade.emoji} ${grade.label}`"
-      />
-      <StatTile
-        :theme="themeByIndex(7)"
-        label="本周平均评分"
-        emoji="📊"
-        :value="stats.avgScore"
-        unit="分"
-        :sub="`近 ${stats.days} 天有效记录`"
-      />
-    </div>
-
-    <!-- ================= 图表网格：3 列 + 跨列，共 8 个图表块 ================= -->
-    <div class="grid grid-cols-3 gap-5">
-      <!-- a. 今日三大营养素摄入占比 -->
-      <MacaronCard class="col-span-1" theme="orange" static-scale title="今日三大营养素摄入占比" emoji="🍩" sub="供能结构 / 环形图">
-        <BaseChart v-if="hasRecords" :option="macroPieOption" height="260px" />
-        <EmptyState v-else emoji="📊" text="暂无营养素数据" sub="去记录一餐即可生成" height="260px" />
-      </MacaronCard>
-
-      <!-- b. 近一周热量摄入趋势 -->
-      <MacaronCard class="col-span-2" theme="blue" static-scale title="近一周热量摄入趋势" emoji="📈" sub="含每日目标参考线">
-        <BaseChart :option="calorieLineOption" height="260px" />
-      </MacaronCard>
-
-      <!-- c. 营养达标进度（无 canvas → 普通 hover 即可） -->
-      <MacaronCard class="col-span-1" theme="green" title="营养达标进度" emoji="✅" sub="实际 / 目标 逐项达标率">
-        <div class="scroll-area no-scrollbar max-h-[248px] space-y-3 pr-1">
-          <div v-for="p in dietStore.progressList" :key="p.key" class="soft-panel">
-            <div class="flex items-center justify-between gap-2">
-              <p class="flex items-center gap-2 text-[12px] font-bold tx-main">
-                <span aria-hidden="true">{{ p.emoji }}</span>{{ p.label }}
-              </p>
-              <StatusBadge :status="p.status" size="sm" />
-            </div>
-            <div class="mt-1 flex items-center justify-between text-[11px] tx-muted">
-              <span class="num">{{ p.value }} / {{ p.target }}{{ p.unit }}</span>
-              <span class="num">{{ p.percent }}%</span>
-            </div>
-            <div class="mt-1.5">
-              <ProgressBar :percent="p.percent" :status="p.status" height="8px" :show-label="false" />
-            </div>
-          </div>
+    <section class="signal-strip" aria-label="今日核心指标">
+      <div v-for="item in metricItems" :key="item.key" class="signal-item" :class="`is-${item.status}`">
+        <div class="signal-label">
+          <span>{{ item.label }}</span
+          ><i>{{ item.percent }}%</i>
         </div>
-      </MacaronCard>
-
-      <!-- d. 饮水与三餐热量分布（双轴柱状图） -->
-      <MacaronCard class="col-span-2" theme="cyan" static-scale title="饮水与三餐热量分布" emoji="💧" sub="左轴 kcal / 右轴 ml">
-        <BaseChart :option="mealWaterOption" height="260px" />
-      </MacaronCard>
-
-      <!-- e. 近一周健康评分走势 -->
-      <MacaronCard class="col-span-1" theme="yellow" static-scale title="近一周健康评分走势" emoji="🏆" sub="80 分为优秀线">
-        <BaseChart :option="scoreLineOption" height="260px" />
-      </MacaronCard>
-
-      <!-- f. 今日食物分类摄入占比 -->
-      <MacaronCard class="col-span-1" theme="purple" static-scale title="今日食物分类摄入占比" emoji="🥦" sub="按食物分类聚合热量">
-        <BaseChart v-if="categoryData.length" :option="categoryPieOption" height="260px" />
-        <EmptyState v-else emoji="🥗" text="暂无分类数据" sub="记录食物后自动聚合" height="260px" />
-      </MacaronCard>
-
-      <!-- g. 营养素均衡度雷达 -->
-      <MacaronCard class="col-span-1" theme="cyan" static-scale title="营养素均衡度" emoji="🎯" sub="今日实际摄入雷达">
-        <BaseChart :option="radarOption" height="260px" />
-      </MacaronCard>
-
-      <!-- h. 近一周蛋白质 / 膳食纤维摄入 -->
-      <MacaronCard class="col-span-3" theme="blue" static-scale title="近一周蛋白质 / 膳食纤维摄入" emoji="🌿" sub="双折线对比">
-        <BaseChart :option="proteinFiberOption" height="240px" />
-      </MacaronCard>
-    </div>
-
-    <!-- ================= 今日记录流水（整行，可滚动） ================= -->
-    <MacaronCard theme="orange" title="今日记录流水" emoji="📝" :sub="`共 ${records.length} 条记录 · 与图表实时联动`">
-      <div v-if="records.length" class="scroll-area no-scrollbar max-h-[200px] space-y-2 pr-1">
-        <div v-for="r in records" :key="r.id" class="list-item">
-          <span class="emoji-badge mc-white" aria-hidden="true">{{ r.emoji }}</span>
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-2">
-              <p class="text-[13px] font-bold tx-main">{{ r.name }}</p>
-              <span class="tag" :class="'tag-' + dietStore.MEAL_THEME[r.mealType]">
-                {{ dietStore.MEAL_EMOJI[r.mealType] }} {{ r.mealType }}
-              </span>
-            </div>
-            <p class="num mt-0.5 text-[11px] tx-muted">{{ r.grams }}{{ unitText(r) }} · {{ r.time }}</p>
-          </div>
-          <span class="num shrink-0 text-[13px] font-bold tx-main">
-            {{ Math.round(r.nutrition.calories) }}<span class="ml-1 text-[11px] tx-muted">kcal</span>
-          </span>
-        </div>
+        <strong class="num"
+          >{{ item.value }} <small>{{ item.unit }}</small></strong
+        >
+        <div class="signal-track"><i :style="{ width: `${item.percent}%` }"></i></div>
       </div>
-      <EmptyState v-else emoji="🍽️" text="今日暂无记录" sub="去「三餐饮食记录」添加一条，大屏即刻联动" height="160px" />
-    </MacaronCard>
+    </section>
 
-    <!-- ================= 底部数据说明 ================= -->
-    <p class="text-center text-[11px] tx-muted">
-      📌 大屏数据说明：全部数据来源于前端模拟（localStorage 本地持久化），用于教学与学科竞赛演示，不构成真实医疗或营养建议。
-      今日日期 {{ dateText }} · {{ BRAND.fullName }} © 大学生学科竞赛项目
-    </p>
+    <section class="command-workspace">
+      <nav class="topic-rail" aria-label="分析主题">
+        <p>分析主题</p>
+        <button
+          v-for="topic in TOPICS"
+          :key="topic.key"
+          type="button"
+          :class="{ active: activeTopic === topic.key }"
+          @click="activeTopic = topic.key"
+        >
+          <span class="num">{{ topic.index }}</span
+          ><strong>{{ topic.label }}</strong
+          ><i aria-hidden="true">→</i>
+        </button>
+        <div class="rail-footer">
+          <span>数据实时联动</span><b>{{ records.length }} 条今日记录</b>
+        </div>
+      </nav>
+
+      <main class="focus-stage">
+        <Transition name="topic-fade" mode="out-in">
+          <div :key="activeTopic" class="focus-inner">
+            <header class="focus-head">
+              <div>
+                <p>{{ activeMeta.eyebrow }}</p>
+                <h2>{{ activeMeta.title }}</h2>
+              </div>
+              <span>{{ activeMeta.description }}</span>
+            </header>
+            <div class="chart-field">
+              <BaseChart v-if="!activeChartEmpty" :key="activeTopic" :option="activeOption" height="410px" />
+              <EmptyState v-else emoji="📊" text="暂无可分析数据" sub="记录一餐后，当前视图会自动生成" height="410px" />
+            </div>
+          </div>
+        </Transition>
+      </main>
+
+      <aside class="intel-rail">
+        <header>
+          <p>动态情报</p>
+          <span>{{ activeMeta.label }}</span>
+        </header>
+        <div class="fact-list">
+          <div v-for="fact in topicFacts" :key="fact.label">
+            <span>{{ fact.label }}</span
+            ><strong class="num">{{ fact.value }}</strong
+            ><small>{{ fact.note }}</small>
+          </div>
+        </div>
+        <div class="attention-list">
+          <div class="attention-title">
+            <strong>今日关注</strong><span>{{ attentionItems.length }} 项</span>
+          </div>
+          <div v-for="item in attentionItems" :key="item.key" class="attention-row">
+            <div>
+              <span>{{ item.emoji }} {{ item.label }}</span
+              ><small class="num">{{ item.value }} / {{ item.target }}{{ item.unit }}</small>
+            </div>
+            <StatusBadge :status="item.status" size="sm" />
+          </div>
+        </div>
+        <button type="button" class="records-trigger" @click="recordsOpen = true">
+          <span
+            ><small>今日饮食流水</small><strong>{{ records.length }} 条记录</strong></span
+          ><i aria-hidden="true">→</i>
+        </button>
+      </aside>
+    </section>
+
+    <footer class="dashboard-foot">
+      <span>全部数据来自本机饮食记录，并随录入实时更新</span><span>{{ BRAND.fullName }} · {{ dateText }}</span>
+    </footer>
+
+    <Transition name="drawer-fade"
+      ><div v-if="recordsOpen" class="records-backdrop" @click="recordsOpen = false"></div
+    ></Transition>
+    <Transition name="drawer-slide">
+      <aside v-if="recordsOpen" class="records-drawer" aria-label="今日饮食流水">
+        <header>
+          <div>
+            <p>实时数据源</p>
+            <h2>今日饮食流水</h2>
+            <span>{{ records.length }} 条记录与当前图表同步</span>
+          </div>
+          <button type="button" @click="recordsOpen = false">关闭</button>
+        </header>
+        <div v-if="records.length" class="records-list">
+          <div v-for="record in records" :key="record.id" class="record-row">
+            <span class="record-emoji" aria-hidden="true">{{ record.emoji }}</span>
+            <div>
+              <strong>{{ record.name }}</strong
+              ><small
+                >{{ dietStore.MEAL_EMOJI[record.mealType] }} {{ record.mealType }} · {{ record.grams
+                }}{{ unitText(record) }} · {{ record.time }}</small
+              >
+            </div>
+            <b class="num">{{ Math.round(record.nutrition.calories) }} <small>kcal</small></b>
+          </div>
+        </div>
+        <EmptyState v-else emoji="🍽️" text="今日暂无记录" sub="记录一餐后，大屏会立即联动" height="260px" />
+        <footer><RouterLink to="/diet" class="btn btn-primary">前往记录饮食</RouterLink></footer>
+      </aside>
+    </Transition>
   </div>
 </template>
+
+<style scoped>
+.dashboard-shell {
+  width: min(1460px, 100%);
+  margin: 0 auto;
+  padding: 4px 0 36px;
+  color: var(--ink);
+}
+.dashboard-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 34px;
+  padding: 16px 0 23px;
+  border-bottom: 1px solid var(--line);
+}
+.dashboard-kicker {
+  margin-bottom: 7px;
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 1.4px;
+}
+.dashboard-head h1 {
+  font-size: 30px;
+  line-height: 1.15;
+}
+.dashboard-head > div > p:last-child {
+  margin-top: 8px;
+  color: var(--tx-muted);
+  font-size: 13px;
+}
+.live-context {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+.live-context > div {
+  display: grid;
+  gap: 4px;
+  padding-left: 24px;
+  border-left: 1px solid var(--line);
+}
+.live-context small {
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.live-context strong {
+  font-size: 14px;
+}
+.live-context .score-context strong {
+  font-size: 23px;
+}
+.score-context em {
+  margin-left: 3px;
+  color: var(--tx-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #27a58b;
+  box-shadow: 0 0 0 5px rgba(39, 165, 139, 0.11);
+  animation: livePulse 2s ease-in-out infinite;
+}
+.signal-strip {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+}
+.signal-item {
+  min-width: 0;
+  padding: 22px 15px 18px;
+}
+.signal-item:first-child {
+  padding-left: 0;
+}
+.signal-item + .signal-item {
+  border-left: 1px solid var(--line);
+}
+.signal-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.signal-label i {
+  font-style: normal;
+}
+.signal-item > strong {
+  display: block;
+  margin-top: 9px;
+  font-size: 22px;
+  white-space: nowrap;
+}
+.signal-item > strong small {
+  font-size: 10px;
+}
+.signal-track {
+  height: 3px;
+  margin-top: 14px;
+  background: #edf0ef;
+  overflow: hidden;
+}
+.signal-track i {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  background: #27a58b;
+  transition: width 0.45s ease;
+}
+.signal-item.is-low .signal-track i {
+  background: #d9a33e;
+}
+.signal-item.is-over .signal-track i {
+  background: #d96d72;
+}
+.command-workspace {
+  display: grid;
+  grid-template-columns: 205px minmax(0, 1fr) 300px;
+  min-height: 590px;
+  border-bottom: 1px solid var(--line);
+}
+.topic-rail {
+  display: flex;
+  flex-direction: column;
+  padding: 30px 24px 24px 0;
+  border-right: 1px solid var(--line);
+}
+.topic-rail > p,
+.intel-rail header p {
+  margin-bottom: 15px;
+  color: var(--tx-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+.topic-rail button {
+  display: grid;
+  grid-template-columns: 28px 1fr 16px;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 0 10px 0 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--tx-muted);
+  text-align: left;
+}
+.topic-rail button span {
+  font-size: 10px;
+}
+.topic-rail button strong {
+  font-size: 13px;
+}
+.topic-rail button i {
+  opacity: 0;
+  font-size: 14px;
+  font-style: normal;
+  transform: translateX(-5px);
+  transition: 0.2s;
+}
+.topic-rail button:hover,
+.topic-rail button.active {
+  color: var(--brand);
+}
+.topic-rail button.active strong {
+  font-weight: 900;
+}
+.topic-rail button.active i {
+  opacity: 1;
+  transform: translateX(0);
+}
+.rail-footer {
+  display: grid;
+  gap: 5px;
+  margin-top: auto;
+  padding-top: 20px;
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.rail-footer b {
+  color: var(--tx-sub);
+  font-size: 12px;
+}
+.focus-stage {
+  min-width: 0;
+  padding: 30px 34px;
+}
+.focus-inner {
+  height: 100%;
+}
+.focus-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+  padding-bottom: 21px;
+  border-bottom: 1px solid var(--line);
+}
+.focus-head p {
+  margin-bottom: 5px;
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 900;
+}
+.focus-head h2 {
+  font-size: 23px;
+}
+.focus-head > span {
+  max-width: 360px;
+  color: var(--tx-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  text-align: right;
+}
+.chart-field {
+  padding-top: 16px;
+}
+.intel-rail {
+  padding: 30px 0 24px 28px;
+  border-left: 1px solid var(--line);
+}
+.intel-rail header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+}
+.intel-rail header p {
+  margin-bottom: 14px;
+}
+.intel-rail header span {
+  padding-bottom: 14px;
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 800;
+}
+.fact-list > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 12px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+.fact-list span {
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.fact-list strong {
+  font-size: 17px;
+}
+.fact-list small {
+  grid-column: 1/-1;
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.attention-list {
+  margin-top: 24px;
+}
+.attention-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+}
+.attention-title strong {
+  font-size: 13px;
+}
+.attention-title span {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.attention-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+}
+.attention-row > div {
+  display: grid;
+  gap: 4px;
+}
+.attention-row span {
+  font-size: 11px;
+  font-weight: 700;
+}
+.attention-row small {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.records-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20px;
+  padding: 18px 0;
+  border: 0;
+  border-block: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+}
+.records-trigger span {
+  display: grid;
+  gap: 4px;
+}
+.records-trigger small {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.records-trigger strong {
+  font-size: 13px;
+}
+.records-trigger i {
+  color: var(--brand);
+  font-size: 15px;
+  font-style: normal;
+}
+.records-trigger:hover {
+  color: var(--brand);
+}
+.dashboard-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding-top: 16px;
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.records-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(28, 38, 35, 0.25);
+}
+.records-drawer {
+  position: fixed;
+  z-index: 70;
+  top: 0;
+  right: 0;
+  width: 500px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  box-shadow: -18px 0 50px rgba(25, 38, 34, 0.14);
+}
+.records-drawer > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 27px 30px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.records-drawer header p {
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 900;
+}
+.records-drawer header h2 {
+  margin: 5px 0;
+  font-size: 23px;
+}
+.records-drawer header span {
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.records-drawer header button {
+  border: 0;
+  background: transparent;
+  color: var(--tx-muted);
+  font-size: 11px;
+}
+.records-list {
+  flex: 1;
+  overflow: auto;
+  padding: 9px 30px;
+}
+.record-row {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 72px;
+  border-bottom: 1px solid var(--line);
+}
+.record-emoji {
+  font-size: 22px;
+}
+.record-row > div {
+  display: grid;
+  gap: 5px;
+}
+.record-row strong {
+  font-size: 13px;
+}
+.record-row small {
+  color: var(--tx-muted);
+  font-size: 10px;
+}
+.record-row > b {
+  font-size: 13px;
+}
+.record-row > b small {
+  font-size: 9px;
+}
+.records-drawer > footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 18px 30px;
+  border-top: 1px solid var(--line);
+}
+.attention-row :deep(.badge) {
+  font-size: 10px;
+}
+.topic-fade-enter-active,
+.topic-fade-leave-active {
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+.topic-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.topic-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+.drawer-slide-enter-active,
+.drawer-slide-leave-active {
+  transition: transform 0.28s ease;
+}
+.drawer-slide-enter-from,
+.drawer-slide-leave-to {
+  transform: translateX(100%);
+}
+.drawer-fade-enter-active,
+.drawer-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.drawer-fade-enter-from,
+.drawer-fade-leave-to {
+  opacity: 0;
+}
+@keyframes livePulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+/* 平板（768–1023px）：侧边栏收起为抽屉，三栏指挥台改为纵向堆叠，
+   指标条由 8 列收敛为 4 列，保证图表与情报区都有足够宽度 */
+@media (max-width: 1023px) {
+  .signal-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .signal-item:nth-child(-n + 4) {
+    border-bottom: 1px solid var(--line);
+  }
+  .signal-item:nth-child(4n + 1) {
+    padding-left: 0;
+  }
+  .command-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+  .topic-rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 18px 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .topic-rail > p {
+    width: 100%;
+    margin-bottom: 4px;
+  }
+  .topic-rail button {
+    flex: 1 1 150px;
+    grid-template-columns: 20px 1fr 14px;
+    min-height: 48px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .rail-footer {
+    display: none;
+  }
+  .focus-stage {
+    padding: 24px 0;
+  }
+  .focus-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .focus-head > span {
+    max-width: none;
+    text-align: left;
+  }
+  .intel-rail {
+    padding: 22px 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot {
+    animation: none;
+  }
+  .topic-fade-enter-active,
+  .topic-fade-leave-active,
+  .drawer-slide-enter-active,
+  .drawer-slide-leave-active {
+    transition: none;
+  }
+}
+</style>
