@@ -12,8 +12,8 @@ import vue from '@vitejs/plugin-vue'
  *     若未启动代理服务，识别页会自动回退到本地可解释规则引擎，功能不中断。
  */
 export default defineConfig({
-  // 相对基路径：hash 路由下可安全使用，保证 dist 可部署到任意子目录，
-  // 也支持直接双击 dist/index.html 打开演示（无需服务器）。
+  // 相对基路径：hash 路由下可安全使用，保证 dist 可通过 HTTP 静态服务部署到任意子目录。
+  // 构建入口使用 ES Module，浏览器不支持通过 file:// 可靠运行，请使用 npm run preview 验收。
   base: './',
   plugins: [vue()],
   // 路径别名：@ 指向 src 目录，方便分层引用

@@ -737,7 +737,7 @@
           }
           setAuth(user, remember)
           toast('登录成功，正在进入膳知…')
-          // 回到后台首页（login.html 位于站点根，./index.html 同时兼容静态服务与 file:// 直接打开）
+          // 回到后台首页（login.html 与 index.html 同目录，兼容根目录和子目录静态托管）
           setTimeout(function () { location.replace('./index.html') }, 650)
         })
 

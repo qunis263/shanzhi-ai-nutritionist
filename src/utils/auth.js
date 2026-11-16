@@ -53,7 +53,7 @@ export function clearAuth() {
 
 /**
  * 跳转到登录页（登录页是独立的 public/login.html，不在 Vue 路由内）
- * 使用相对路径，兼容 dev 服务、preview 服务与直接打开 dist 的场景
+ * 使用相对路径，兼容 dev、preview 与子目录静态托管场景
  */
 export function redirectToLogin() {
   if (location.pathname.endsWith('login.html')) return

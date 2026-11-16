@@ -138,7 +138,7 @@ const routes = [
 ]
 
 const router = createRouter({
-  // 采用 hash 模式，保证直接用浏览器打开打包产物也能正常跳转（答辩演示更稳妥）
+  // 采用 hash 模式，保证打包产物部署到任意 HTTP 静态服务后无需服务端路由回退
   history: createWebHashHistory(),
   routes,
   /** 切换路由后回到页面顶部 */
