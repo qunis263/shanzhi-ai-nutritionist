@@ -7,6 +7,17 @@
 
 ---
 
+## 团队信息
+
+| 项目 | 内容 |
+| --- | --- |
+| 参赛学校 | 沧州交通学院 |
+| 团队成员 | 沙擎炘、赵家庆、李晓瑞 |
+| 指导教师 | 孙真真 |
+| 项目名称 | 《膳知・AI 营养分析师》 |
+
+---
+
 ## 一、核心亮点
 
 | 亮点 | 说明 |
@@ -33,7 +44,7 @@
 | 类型系统 | TypeScript 严格模式（AI 核心链路渐进式迁移，兼容既有 JavaScript） |
 | 构建工具 | Vite 6 |
 | UI 与样式 | TailwindCSS 3（自定义马卡龙设计系统，无第三方组件库） |
-| 图表 | ECharts 5 |
+| 图表 | ECharts 6.1 |
 | 状态管理 | Pinia（+ localStorage 持久化） |
 | 路由 | Vue Router 4（hash 模式） |
 | AI 模型 | 智谱 GLM-4V（视觉识别）/ GLM-5.3-Flash（文本对话），OpenAI 兼容端点；支持 function calling |
@@ -70,8 +81,8 @@ npm run check
 ```
 
 浏览器打开 http://localhost:5173 即可。页面使用 **hash 路由**，构建产物使用**相对路径**，
-可直接双击 `dist/index.html` 打开演示基础功能。但 `file://` 协议下浏览器会拦截 `fetch`，
-因此「AI 能力评测」页的报告文件、以及需要代理的真实云端识别 / 对话，请用下面的预览方式体验：
+可部署到任意子目录。构建后的入口使用 ES Module，浏览器在 `file://` 协议下会拦截模块脚本和
+`fetch`，因此请勿直接双击 `dist/index.html`；本地验收统一通过下面的 HTTP 预览方式运行：
 
 ```bash
 npm run preview                  # http://localhost:4173，已内置 /api 代理
@@ -82,7 +93,7 @@ npm run preview                  # http://localhost:4173，已内置 /api 代理
 | 方式 | 交付内容 | 优点 | 限制 |
 | --- | --- | --- | --- |
 | **A. 源码包**（推荐） | 除 `node_modules/`、`dist/`、`.env` 外的全部源码与 `docs/` | 按上文一键启动，可完整体验真实云端 AI | 需要 Node ≥18，并自备 `.env` 中的 API Key |
-| **B. 纯静态包** | 仅 `dist/` 目录 | 无需任何环境，双击或静态托管即可打开 | 无法访问 `/api`，自动降级为本地引擎 / Mock，真实云端 AI 不可用 |
+| **B. 纯静态包** | 仅 `dist/` 目录 | 可直接部署到静态托管服务或任意 HTTP 文件服务器 | 不能通过 `file://` 双击运行；无法访问 `/api` 时自动降级为本地引擎 / Mock，真实云端 AI 不可用 |
 
 > ⚠️ 交付压缩包请排除：`.env`（含真实 Key）、`node_modules/`、`.git/`、`output/`、`.workbuddy/`、`.trae-html-share-packages/`、`.screenshots/`。
 > 若采用方式 B 且仍需真实 AI，需将 `dist` 与 `server/` 同域部署，并把 `/api` 反向代理到 Node 代理服务。
